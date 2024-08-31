@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"salutations/internal/embeds"
 	firebaseAdapter "salutations/internal/firebase"
 	util "salutations/pkg/util"
@@ -153,25 +154,21 @@ func (g *greeterRunner) voiceStateUpdate(s *discordgo.Session, vc *discordgo.Voi
 			g.logger.Error("failed to get random audio track from firestore", zap.Error(err))
 			return
 		}
-		audioBytes, err := g.firebaseAdapter.DownloadFileBytes(ctx, BUCKET_NAME, fmt.Sprintf("voicelines/%v", randomAudioTrack))
 
+		audioBytes, err := g.firebaseAdapter.DownloadFileBytes(ctx, BUCKET_NAME, fmt.Sprintf("voicelines/%v", randomAudioTrack))
 		if err != nil {
 			g.logger.Error("failed to get audio bytes from storage", zap.Error(err))
 			return
 		}
-		filePath, err := util.MakeDirectoryAndFile(randomAudioTrack)
-		if err != nil {
-			g.logger.Error("failed to get make temp directory and file", zap.Error(err))
-			return
 
-		}
-		if err := util.WriteFile(audioBytes, filePath); err != nil {
-			g.logger.Error("failed to write contents to file", zap.Error(err))
+		file, err := util.DownloadFileToTempDirectory(audioBytes)
+		if err != nil {
+			g.logger.Error("failed to download audio bytes to temporary directory", zap.Error(err))
 			return
 		}
 
 		g.guildsMutex.RLock()
-		g.guildPlayerMappings[vc.GuildID].queue = append(g.guildPlayerMappings[vc.GuildID].queue, filePath)
+		g.guildPlayerMappings[vc.GuildID].queue = append(g.guildPlayerMappings[vc.GuildID].queue, file.Name())
 		g.guildsMutex.RUnlock()
 		if g.guildPlayerMappings[vc.GuildID].voiceState == NOT_PLAYING {
 			g.songSignal <- g.guildPlayerMappings[vc.GuildID]
@@ -257,12 +254,18 @@ func (g *greeterRunner) upload(s *discordgo.Session, i *discordgo.InteractionCre
 	for _, file := range fileAttachment {
 		switch FileType(file.ContentType) {
 		case mp3, mp4:
-			file, err := util.DownloadFileToTempDirectory(file.URL)
+			resp, err := http.Get(file.URL)
+			if err != nil {
+				g.logger.Error("error attempting to download discord file", zap.Error(err))
+				return err
+			}
+			defer resp.Body.Close()
+			file, err := util.DownloadFileToTempDirectory(resp.Body)
 			if err != nil {
 				g.logger.Error("error attempting to download temporary file", zap.Error(err))
 				return err
 			}
-			defer file.Close()
+
 			uuid, _ := uuid.NewV7()
 
 			err = g.firebaseAdapter.UploadFileToStorage(ctx, BUCKET_NAME, fmt.Sprintf("voicelines/%s", uuid), file, uuid.String())
@@ -271,12 +274,18 @@ func (g *greeterRunner) upload(s *discordgo.Session, i *discordgo.InteractionCre
 				return err
 			}
 		case zip:
-			file, err := util.DownloadFileToTempDirectory(file.URL)
+			resp, err := http.Get(file.URL)
+			if err != nil {
+				g.logger.Error("error attempting to download discord file", zap.Error(err))
+				return err
+			}
+			defer resp.Body.Close()
+			file, err := util.DownloadFileToTempDirectory(resp.Body)
 			if err != nil {
 				g.logger.Error("error attempting to download temporary file", zap.Error(err))
 				return err
 			}
-			defer file.Close()
+
 			fileList, err := util.Unzip(file.Name(), "temp")
 			if err != nil {
 				g.logger.Error("error unzipping inputted zip", zap.Error(err))

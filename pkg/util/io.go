@@ -4,7 +4,6 @@ import (
 	"archive/zip"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -129,19 +128,13 @@ func GetFileExtFromMime(mimeType string) string {
 	return sm[1]
 }
 
-func DownloadFileToTempDirectory(url string) (*os.File, error) {
+func DownloadFileToTempDirectory(data io.Reader) (*os.File, error) {
 	tempFile, err := os.CreateTemp("", "discordfile-")
 	if err != nil {
 		return nil, err
 	}
-
-	resp, err := http.Get(url)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if _, err = io.Copy(tempFile, resp.Body); err != nil {
+	defer tempFile.Close()
+	if _, err = io.Copy(tempFile, data); err != nil {
 		return nil, err
 	}
 

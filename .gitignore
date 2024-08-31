@@ -21,8 +21,6 @@
 go.work
 go.work.sum
 
-# env file
-.env
 
 # vscode settings 
 .vscode
@@ -31,3 +29,6 @@ go.work.sum
 __debug_bin*
 
 temp/
+
+# environment variables
+*.env

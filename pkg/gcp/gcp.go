@@ -12,7 +12,7 @@ type GcpCredentials struct {
 	PrivateKeyId string `json:"private_key_id" structs:"private_key_id" mapstructure:"private_key_id"`
 	PrivateKey   string `json:"private_key" structs:"private_key" mapstructure:"private_key"`
 	ProjectId    string `json:"project_id" structs:"project_id" mapstructure:"project_id"`
-	Type         string `json:"type" structs:"type" mapstructure"type"`
+	Type         string `json:"type" structs:"type" mapstructure:"type"`
 }
 
 func GetCredentials() ([]byte, error) {
