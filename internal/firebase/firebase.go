@@ -2,7 +2,6 @@ package firebasehelper
 
 import (
 	"context"
-	"errors"
 	"io"
 	"os"
 	"time"
@@ -10,8 +9,6 @@ import (
 	"cloud.google.com/go/firestore"
 	"cloud.google.com/go/storage"
 	"github.com/google/uuid"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 type Firebase interface {
@@ -19,7 +16,8 @@ type Firebase interface {
 	GenerateSignedUrl(bucketName string, objectName string) (string, error)
 	DownloadFileBytes(ctx context.Context, bucketName string, objectName string) (io.Reader, error)
 	UploadFileToStorage(ctx context.Context, bucketName string, objectName string, file *os.File, fileName string) error
-	UpdateDocument(ctx context.Context, collection string, document string, data interface{}) error
+	UpdateDocument(ctx context.Context, collection string, document string, data map[string]interface{}) error
+	CreateDocument(ctx context.Context, collection string, document string, data interface{}) error
 }
 
 type firebaseAdapter struct {
@@ -59,31 +57,24 @@ func (f *firebaseAdapter) GetDocumentFromCollection(ctx context.Context, collect
 	return data, nil
 }
 
-func (f *firebaseAdapter) UpdateDocument(ctx context.Context, collection string, document string, data interface{}) error {
-	if _, err := f.GetDocumentFromCollection(ctx, collection, document); err != nil {
-		if status.Code(err) == codes.NotFound {
-			if _, err := f.firestoreClient.Collection(collection).Doc(document).Set(ctx, data); err != nil {
-				return err
-			}
-		}
+func (f *firebaseAdapter) CreateDocument(ctx context.Context, collection string, document string, data interface{}) error {
+	_, err := f.firestoreClient.Collection(collection).Doc(document).Create(ctx, data)
+	return err
+}
+
+func (f *firebaseAdapter) UpdateDocument(ctx context.Context, collection string, document string, data map[string]interface{}) error {
+	updates := []firestore.Update{}
+
+	for key, value := range data {
+		updates = append(updates, firestore.Update{
+			Path:  key,
+			Value: value,
+		})
+	}
+	if _, err := f.firestoreClient.Collection(collection).Doc(document).Update(ctx, updates); err != nil {
 		return err
 	}
-
-	updates := []firestore.Update{}
-	if castedData, ok := data.(map[string]interface{}); ok {
-		for key, value := range castedData {
-			updates = append(updates, firestore.Update{
-				Path:  key,
-				Value: value,
-			})
-		}
-		if _, err := f.firestoreClient.Collection(collection).Doc(document).Update(ctx, updates); err != nil {
-			return err
-		}
-		return nil
-	}
-
-	return errors.New("unexpected data value")
+	return nil
 }
 
 func (f *firebaseAdapter) GenerateSignedUrl(bucketName string, objectName string) (string, error) {

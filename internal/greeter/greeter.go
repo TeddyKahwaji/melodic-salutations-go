@@ -17,6 +17,8 @@ import (
 	"github.com/bwmarrin/discordgo"
 	"golang.org/x/exp/rand"
 	"golang.org/x/sync/errgroup"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/google/uuid"
 	"github.com/jonas747/dca"
@@ -61,6 +63,21 @@ type greeterRunner struct {
 	songSignal          chan *guildPlayer
 	guildPlayerMappings map[string]*guildPlayer
 	guildsMutex         sync.RWMutex
+}
+
+type trackRecord struct {
+	AddedBy   string    `firestore:"added_by"`
+	CreatedAt time.Time `firestore:"created_at"`
+	TrackName string    `firestore:"track_name"`
+}
+type firebaseIntroRecord struct {
+	Name       string        `firestore:"name"`
+	IntroArray []trackRecord `firestore:"intro_array"`
+}
+
+type firebaseOutroRecord struct {
+	Name       string        `firestore:"name"`
+	OutroArray []trackRecord `firestore:"outro_array"`
 }
 
 var commands []*discordgo.ApplicationCommand = []*discordgo.ApplicationCommand{{
@@ -118,14 +135,13 @@ func (g *greeterRunner) GetCommands() []*discordgo.ApplicationCommand {
 }
 
 func (g *greeterRunner) RegisterCommands(s *discordgo.Session) error {
-	for _, command := range commands {
-		_, err := s.ApplicationCommandCreate(s.State.Application.ID, "", command)
-		if err != nil {
-			return err
-		}
+
+	if _, err := s.ApplicationCommandBulkOverwrite(s.State.Application.ID, "", commands); err != nil {
+		return err
 	}
 	s.AddHandler(g.greeterHandler)
 	s.AddHandler(g.voiceStateUpdate)
+
 	return nil
 
 }
@@ -304,24 +320,34 @@ func (g *greeterRunner) upload(s *discordgo.Session, i *discordgo.InteractionCre
 				g.logger.Error("error attempting to download discord file", zap.Error(err))
 				return err
 			}
-			defer resp.Body.Close()
 
 			file, err := util.DownloadFileToTempDirectory(resp.Body)
-			defer file.Close()
+			defer func() {
+				if err := resp.Body.Close(); err != nil {
+					g.logger.Error("error closing body", zap.Error(err))
+				}
+				if err := file.Close(); err != nil {
+					g.logger.Error("error closing file", zap.Error(err))
+				}
+				if err := util.DeleteFile(file.Name()); err != nil {
+					g.logger.Error("error trying to delete file", zap.Error(err), zap.String("file_name", file.Name()))
+				}
+
+			}()
+
 			if err != nil {
 				g.logger.Error("error attempting to download temporary file", zap.Error(err))
 				return err
 			}
 
 			uuid, _ := uuid.NewV7()
-			uuid_string := uuid.String()
-			if err := g.firebaseAdapter.UploadFileToStorage(ctx, BUCKET_NAME, fmt.Sprintf("voicelines/%s", uuid_string), file, uuid_string); err != nil {
+			if err := g.firebaseAdapter.UploadFileToStorage(ctx, BUCKET_NAME, fmt.Sprintf("voicelines/%s", uuid.String()), file, uuid.String()); err != nil {
 				g.logger.Error("error attempting to upload to firebase", zap.Error(err))
 				return err
 			}
 
 			data := map[string]interface{}{
-				audioListKey: firestore.ArrayUnion(map[string]string{"track_name": uuid_string,
+				audioListKey: firestore.ArrayUnion(map[string]string{"track_name": uuid.String(),
 					"created_at": time.Now().String(),
 					"added_by":   i.Member.User.ID}),
 				"name": memberID,
@@ -332,7 +358,7 @@ func (g *greeterRunner) upload(s *discordgo.Session, i *discordgo.InteractionCre
 				return err
 			}
 
-			signedUrl, err := g.firebaseAdapter.GenerateSignedUrl(BUCKET_NAME, fmt.Sprintf("voicelines/%s", uuid_string))
+			signedUrl, err := g.firebaseAdapter.GenerateSignedUrl(BUCKET_NAME, fmt.Sprintf("voicelines/%s", uuid.String()))
 			if err != nil {
 				g.logger.Error("error generating signed url", zap.Error(err), zap.String("member_created_for", member.User.ID), zap.String("member_created_by", i.Member.User.ID))
 				return err
@@ -364,6 +390,25 @@ func (g *greeterRunner) upload(s *discordgo.Session, i *discordgo.InteractionCre
 				g.logger.Error("error unzipping inputted zip", zap.Error(err))
 				return err
 			}
+
+			if _, err := g.firebaseAdapter.GetDocumentFromCollection(ctx, collection, memberID); err != nil {
+				if status.Code(err) == codes.NotFound {
+					var err error
+					if collection == WELCOME_COLLECTION {
+						err = g.firebaseAdapter.CreateDocument(ctx, collection, memberID, firebaseIntroRecord{Name: memberID, IntroArray: []trackRecord{}})
+					} else {
+						err = g.firebaseAdapter.CreateDocument(ctx, collection, memberID, firebaseOutroRecord{Name: memberID, OutroArray: []trackRecord{}})
+					}
+
+					if err != nil {
+						g.logger.Error("error creating firestore document", zap.Error(err), zap.String("user_id", memberID), zap.String("collection", collection))
+						return err
+					}
+				} else {
+					return err
+				}
+			}
+
 			eg, ctx := errgroup.WithContext(ctx)
 			for _, file := range fileList {
 				eg.Go(func() error {
@@ -372,18 +417,30 @@ func (g *greeterRunner) upload(s *discordgo.Session, i *discordgo.InteractionCre
 						return err
 					}
 					defer func() {
-						f.Close()
+						if err := f.Close(); err != nil {
+							g.logger.Error("error closing file", zap.Error(err))
+						}
 						if err := util.DeleteFile(f.Name()); err != nil {
 							g.logger.Error("error trying to delete file", zap.Error(err), zap.String("file_name", f.Name()))
 						}
 					}()
 
 					uuid, _ := uuid.NewV7()
-					return g.firebaseAdapter.UploadFileToStorage(ctx, BUCKET_NAME, fmt.Sprintf("voicelines/%s", uuid), file, uuid.String())
+					if err := g.firebaseAdapter.UploadFileToStorage(ctx, BUCKET_NAME, fmt.Sprintf("voicelines/%s", uuid), file, uuid.String()); err != nil {
+						return err
+					}
+
+					data := map[string]interface{}{
+						audioListKey: firestore.ArrayUnion(trackRecord{
+							TrackName: uuid.String(),
+							CreatedAt: time.Now(),
+							AddedBy:   i.Member.User.ID}),
+					}
+					return g.firebaseAdapter.UpdateDocument(ctx, collection, memberID, data)
 				})
 			}
 			if err = eg.Wait(); err != nil {
-				g.logger.Error("error uploading to firebase storage", zap.Error(err))
+				g.logger.Error("error creating or uploading files", zap.Error(err))
 				return err
 			}
 
