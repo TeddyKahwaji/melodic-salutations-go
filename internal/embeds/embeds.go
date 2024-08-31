@@ -61,3 +61,13 @@ func SuccessfulAudioZipUploadEmbed(memberCreatedFor *discordgo.Member, memberCre
 		Fields: embedFields,
 	}
 }
+
+func UnexpectedErrorEmbed() *discordgo.MessageEmbed {
+	return &discordgo.MessageEmbed{
+		Title: "Oops something went wrong, please try again later!",
+		Color: 0x992D22,
+		Thumbnail: &discordgo.MessageEmbedThumbnail{
+			URL: "https://media.giphy.com/media/l3vR7SWnEv6mmhS0g/giphy.gif",
+		},
+	}
+}

@@ -521,10 +521,22 @@ func (g *greeterRunner) upload(s *discordgo.Session, i *discordgo.InteractionCre
 }
 
 func (g *greeterRunner) greeterHandler(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	var err error
 	switch i.ApplicationCommandData().Name {
 	case "upload":
-		if err := g.upload(s, i); err != nil {
-			g.logger.Error("An error occurred during the upload command", zap.Error(err))
-		}
+		err = g.upload(s, i)
+
+	}
+
+	if err != nil {
+		g.logger.Error("An error occurred during when executing command", zap.Error(err), zap.String("command", i.ApplicationCommandData().Name))
+		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Embeds: []*discordgo.MessageEmbed{
+					embeds.UnexpectedErrorEmbed(),
+				},
+			},
+		})
 	}
 }
