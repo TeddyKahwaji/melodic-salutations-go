@@ -435,8 +435,7 @@ func (g *greeterRunner) upload(s *discordgo.Session, i *discordgo.InteractionCre
 				}
 			}
 
-			var mutex sync.Mutex
-
+			urlChannel := make(chan string, len(fileList))
 			urlsCreated := []string{}
 
 			eg, ctx := errgroup.WithContext(ctx)
@@ -481,18 +480,32 @@ func (g *greeterRunner) upload(s *discordgo.Session, i *discordgo.InteractionCre
 						return fmt.Errorf("error generating signed url %w", err)
 					}
 
-					mutex.Lock()
-					urlsCreated = append(urlsCreated, signedURL)
-					mutex.Unlock()
+					select {
+					case urlChannel <- signedURL:
+					case <-ctx.Done():
+						return context.Canceled
+					default:
+					}
+
 					return nil
 				})
 			}
 
-			if err = eg.Wait(); err != nil || len(urlsCreated) == 0 {
+			if err = eg.Wait(); err != nil {
 				g.logger.Error("error creating or uploading files", zap.Error(err), zap.String("member_created_for", member.User.ID), zap.String("member_created_by", i.Member.User.ID))
 				return err
 			}
 
+			close(urlChannel)
+
+			for url := range urlChannel {
+				urlsCreated = append(urlsCreated, url)
+			}
+
+			if len(urlsCreated) == 0 {
+				g.logger.Error("error no urls created", zap.Error(err), zap.String("member_created_for", member.User.ID), zap.String("member_created_by", i.Member.User.ID))
+				return fmt.Errorf("error no urls were created")
+			}
 			_, err = s.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
 				Embeds: []*discordgo.MessageEmbed{
 					embeds.SuccessfulAudioZipUploadEmbed(member, i.Member, audioType, urlsCreated),
