@@ -39,7 +39,7 @@ func main() {
 	if err != nil {
 		logger.Fatal("bot could not be booted", zap.Error(err))
 	}
-	bot.Identify.Intents = discordgo.IntentGuildMembers | discordgo.IntentsGuilds
+	bot.Identify.Intents = discordgo.IntentsAll
 	bot.StateEnabled = true
 	bot.AddHandler(onReady)
 	if err := bot.Open(); err != nil {
