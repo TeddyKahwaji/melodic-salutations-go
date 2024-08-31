@@ -2,34 +2,34 @@ package greeter
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
-	cogs "salutations/internal/cogs"
-	"salutations/internal/embeds"
-	firebaseAdapter "salutations/internal/firebase"
-	util "salutations/pkg/util"
 	"sync"
 	"time"
 
 	"cloud.google.com/go/firestore"
 	"github.com/bwmarrin/discordgo"
-	"golang.org/x/exp/rand"
-	"golang.org/x/sync/errgroup"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
-
 	"github.com/google/uuid"
 	"github.com/jonas747/dca"
 	"github.com/kkdai/youtube/v2"
 	"go.uber.org/zap"
+	"golang.org/x/exp/rand"
+	"golang.org/x/sync/errgroup"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	cogs "salutations/internal/cogs"
+	"salutations/internal/embeds"
+	firebaseAdapter "salutations/internal/firebase"
+	util "salutations/pkg/util"
 )
 
 const (
-	WELCOME_COLLECTION string = "welcomeIntros"
-	OUTRO_COLLECTION   string = "byeOutros"
-	BUCKET_NAME        string = "twitterbot-e7ab0.appspot.com"
+	WelcomeCollection string = "welcomeIntros"
+	OutroCollection   string = "byeOutros"
+	BucketName        string = "twitterbot-e7ab0.appspot.com"
 )
 
 type FileType string
@@ -80,41 +80,6 @@ type firebaseOutroRecord struct {
 	OutroArray []trackRecord `firestore:"outro_array"`
 }
 
-var commands []*discordgo.ApplicationCommand = []*discordgo.ApplicationCommand{{
-	Name:        "upload",
-	Description: "Upload a voiceline for a user from your server",
-	Options: []*discordgo.ApplicationCommandOption{
-		{
-			Name:        "member",
-			Description: "The member you wish to create a voiceline for",
-			Type:        discordgo.ApplicationCommandOptionUser,
-			Required:    true,
-		},
-		{
-			Name:        "type",
-			Type:        discordgo.ApplicationCommandOptionString,
-			Description: "The type of voiceline you are creating",
-			Required:    true,
-			Choices: []*discordgo.ApplicationCommandOptionChoice{
-				{
-					Name:  "Intro",
-					Value: "intro",
-				},
-				{
-					Name:  "Outro",
-					Value: "outro",
-				},
-			},
-		},
-		{
-			Name:        "file",
-			Type:        discordgo.ApplicationCommandOptionAttachment,
-			Required:    true,
-			Description: "The audio files/zips you wish to upload",
-		},
-	},
-}}
-
 func NewGreeterRunner(logger *zap.Logger, ytdlClient *youtube.Client, firebaseAdapter firebaseAdapter.Firebase) (cogs.Cogs, error) {
 	songSignals := make(chan *guildPlayer)
 	greeter := &greeterRunner{
@@ -126,24 +91,59 @@ func NewGreeterRunner(logger *zap.Logger, ytdlClient *youtube.Client, firebaseAd
 		guildPlayerMappings: make(map[string]*guildPlayer),
 		guildsMutex:         sync.RWMutex{},
 	}
+
 	go greeter.globalPlay()
+
 	return greeter, nil
 }
 
 func (g *greeterRunner) GetCommands() []*discordgo.ApplicationCommand {
-	return commands
+	return []*discordgo.ApplicationCommand{
+		{
+			Name:        "upload",
+			Description: "Upload a voiceline for a user from your server",
+			Options: []*discordgo.ApplicationCommandOption{
+				{
+					Name:        "member",
+					Description: "The member you wish to create a voiceline for",
+					Type:        discordgo.ApplicationCommandOptionUser,
+					Required:    true,
+				},
+				{
+					Name:        "type",
+					Type:        discordgo.ApplicationCommandOptionString,
+					Description: "The type of voiceline you are creating",
+					Required:    true,
+					Choices: []*discordgo.ApplicationCommandOptionChoice{
+						{
+							Name:  "Intro",
+							Value: "intro",
+						},
+						{
+							Name:  "Outro",
+							Value: "outro",
+						},
+					},
+				},
+				{
+					Name:        "file",
+					Type:        discordgo.ApplicationCommandOptionAttachment,
+					Required:    true,
+					Description: "The audio files/zips you wish to upload",
+				},
+			},
+		},
+	}
 }
 
 func (g *greeterRunner) RegisterCommands(s *discordgo.Session) error {
-
-	if _, err := s.ApplicationCommandBulkOverwrite(s.State.Application.ID, "", commands); err != nil {
+	if _, err := s.ApplicationCommandBulkOverwrite(s.State.Application.ID, "", g.GetCommands()); err != nil {
 		return err
 	}
+
 	s.AddHandler(g.greeterHandler)
-	s.AddHandler(g.voiceStateUpdate)
-
+	s.AddHandler(g.voiceUpdate)
 	return nil
-
 }
 
 func (g *greeterRunner) globalPlay() {
@@ -152,7 +152,7 @@ func (g *greeterRunner) globalPlay() {
 	}
 }
 
-func (g *greeterRunner) voiceStateUpdate(s *discordgo.Session, vc *discordgo.VoiceStateUpdate) {
+func (g *greeterRunner) voiceUpdate(s *discordgo.Session, vc *discordgo.VoiceStateUpdate) {
 	hasJoined := vc.BeforeUpdate == nil && !vc.VoiceState.Member.User.Bot && vc.ChannelID != ""
 	hasLeft := vc.BeforeUpdate != nil && !vc.Member.User.Bot && vc.ChannelID == ""
 
@@ -162,10 +162,15 @@ func (g *greeterRunner) voiceStateUpdate(s *discordgo.Session, vc *discordgo.Voi
 			g.logger.Error("error getting channel", zap.Error(err), zap.String("channel_id", vc.BeforeUpdate.ChannelID))
 			return
 		}
+
 		if channel.MemberCount == 0 && vc.VoiceState != nil {
 			if vc, ok := s.VoiceConnections[vc.GuildID]; ok {
 				g.guildsMutex.Lock()
-				vc.Disconnect()
+				if err := vc.Disconnect(); err != nil {
+					g.logger.Error("error disconnecting from channel", zap.Error(err), zap.String("channel_id", vc.ChannelID))
+					return
+				}
+
 				delete(g.guildPlayerMappings, vc.GuildID)
 				g.guildsMutex.Unlock()
 			}
@@ -175,9 +180,9 @@ func (g *greeterRunner) voiceStateUpdate(s *discordgo.Session, vc *discordgo.Voi
 
 	var COLLECTION string
 	if hasJoined {
-		COLLECTION = WELCOME_COLLECTION
+		COLLECTION = WelcomeCollection
 	} else {
-		COLLECTION = OUTRO_COLLECTION
+		COLLECTION = OutroCollection
 	}
 
 	ctx := context.Background()
@@ -202,7 +207,8 @@ func (g *greeterRunner) voiceStateUpdate(s *discordgo.Session, vc *discordgo.Voi
 			g.logger.Error("failed to get random audio track from firestore", zap.Error(err))
 			return
 		}
-		audioBytes, err := g.firebaseAdapter.DownloadFileBytes(ctx, BUCKET_NAME, fmt.Sprintf("voicelines/%s", randomAudioTrack))
+
+		audioBytes, err := g.firebaseAdapter.DownloadFileBytes(ctx, BucketName, fmt.Sprintf("voicelines/%s", randomAudioTrack))
 		if err != nil {
 			g.logger.Error("failed to get audio bytes from storage", zap.Error(err))
 			return
@@ -216,6 +222,7 @@ func (g *greeterRunner) voiceStateUpdate(s *discordgo.Session, vc *discordgo.Voi
 
 		g.guildPlayerMappings[vc.GuildID].queue = append(g.guildPlayerMappings[vc.GuildID].queue, file.Name())
 		g.guildsMutex.Unlock()
+
 		if g.guildPlayerMappings[vc.GuildID].voiceState == NOT_PLAYING {
 			g.songSignal <- g.guildPlayerMappings[vc.GuildID]
 		}
@@ -227,17 +234,19 @@ func (g *greeterRunner) retrieveRandomAudioName(ctx context.Context, collection 
 	if err != nil {
 		return "", err
 	}
+
 	var audioListKey string
-	if collection == WELCOME_COLLECTION {
+
+	if collection == WelcomeCollection {
 		audioListKey = "intro_array"
 	} else {
 		audioListKey = "outro_array"
 	}
 
-	if audio_array, ok := data[audioListKey]; ok {
-		if audio_array_slice, ok := audio_array.([]interface{}); ok {
-			randomIndex := rand.Intn(len(audio_array_slice))
-			if recordMap, ok := audio_array_slice[randomIndex].(map[string]interface{}); ok {
+	if audioArray, ok := data[audioListKey]; ok {
+		if audioSlice, ok := audioArray.([]interface{}); ok {
+			randomIndex := rand.Intn(len(audioSlice))
+			if recordMap, ok := audioSlice[randomIndex].(map[string]interface{}); ok {
 				return recordMap["track_name"].(string), nil
 			}
 		}
@@ -250,6 +259,7 @@ func (g *greeterRunner) playAudio(guildPlayer *guildPlayer) {
 	if guildPlayer.voiceClient == nil || len(guildPlayer.queue) == 0 {
 		return
 	}
+
 	g.guildsMutex.Lock()
 	guildPlayer.voiceState = PLAYING
 	audioPath := guildPlayer.queue[0]
@@ -273,13 +283,16 @@ func (g *greeterRunner) playAudio(guildPlayer *guildPlayer) {
 	}
 
 	defer es.Cleanup()
+
 	doneChan := make(chan error)
 	guildPlayer.stream = dca.NewStream(es, guildPlayer.voiceClient, doneChan)
 	guildPlayer.voiceState = PLAYING
+
 	for err := range doneChan {
-		if err != nil && err != io.EOF {
+		if err != nil && errors.Is(err, io.EOF) {
 			return
 		}
+
 		g.guildsMutex.Lock()
 		if len(guildPlayer.queue) > 0 {
 			g.songSignal <- guildPlayer
@@ -288,30 +301,36 @@ func (g *greeterRunner) playAudio(guildPlayer *guildPlayer) {
 		}
 		g.guildsMutex.Unlock()
 	}
-
 }
 
 func (g *greeterRunner) upload(s *discordgo.Session, i *discordgo.InteractionCreate) error {
-	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+	if err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
-	})
+	}); err != nil {
+		g.logger.Error("error attempting to defer message in upload command", zap.Error(err))
+		return err
+	}
 
 	options := i.ApplicationCommandData().Options
 	memberID, audioType := options[0].Value.(string), options[1].Value.(string)
+
 	member, err := s.State.Member(i.GuildID, memberID)
 	if err != nil {
 		g.logger.Error("error getting member to create audio track for", zap.Error(err), zap.String("user_id", memberID))
 		return err
 	}
+
 	audioListKey := "outro_array"
-	collection := OUTRO_COLLECTION
+	collection := OutroCollection
+
 	if audioType == "intro" {
-		collection = WELCOME_COLLECTION
+		collection = WelcomeCollection
 		audioListKey = "intro_array"
 	}
 
 	fileAttachment := i.ApplicationCommandData().Resolved.Attachments
 	ctx := context.Background()
+
 	for _, file := range fileAttachment {
 		switch FileType(file.ContentType) {
 		case mp3, mp4:
@@ -326,13 +345,14 @@ func (g *greeterRunner) upload(s *discordgo.Session, i *discordgo.InteractionCre
 				if err := resp.Body.Close(); err != nil {
 					g.logger.Error("error closing body", zap.Error(err))
 				}
+
 				if err := file.Close(); err != nil {
 					g.logger.Error("error closing file", zap.Error(err))
 				}
+
 				if err := util.DeleteFile(file.Name()); err != nil {
 					g.logger.Error("error trying to delete file", zap.Error(err), zap.String("file_name", file.Name()))
 				}
-
 			}()
 
 			if err != nil {
@@ -341,15 +361,17 @@ func (g *greeterRunner) upload(s *discordgo.Session, i *discordgo.InteractionCre
 			}
 
 			uuid, _ := uuid.NewV7()
-			if err := g.firebaseAdapter.UploadFileToStorage(ctx, BUCKET_NAME, fmt.Sprintf("voicelines/%s", uuid.String()), file, uuid.String()); err != nil {
+			if err := g.firebaseAdapter.UploadFileToStorage(ctx, BucketName, fmt.Sprintf("voicelines/%s", uuid.String()), file, uuid.String()); err != nil {
 				g.logger.Error("error attempting to upload to firebase", zap.Error(err))
 				return err
 			}
 
 			data := map[string]interface{}{
-				audioListKey: firestore.ArrayUnion(map[string]string{"track_name": uuid.String(),
+				audioListKey: firestore.ArrayUnion(map[string]string{
+					"track_name": uuid.String(),
 					"created_at": time.Now().String(),
-					"added_by":   i.Member.User.ID}),
+					"added_by":   i.Member.User.ID,
+				}),
 				"name": memberID,
 			}
 
@@ -358,16 +380,17 @@ func (g *greeterRunner) upload(s *discordgo.Session, i *discordgo.InteractionCre
 				return err
 			}
 
-			signedUrl, err := g.firebaseAdapter.GenerateSignedUrl(BUCKET_NAME, fmt.Sprintf("voicelines/%s", uuid.String()))
+			signedURL, err := g.firebaseAdapter.GenerateSignedURL(BucketName, fmt.Sprintf("voicelines/%s", uuid.String()))
 			if err != nil {
 				g.logger.Error("error generating signed url", zap.Error(err), zap.String("member_created_for", member.User.ID), zap.String("member_created_by", i.Member.User.ID))
 				return err
 			}
 			_, err = s.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
 				Embeds: []*discordgo.MessageEmbed{
-					embeds.SuccessfulAudioFileUploadEmbed(member, i.Member, audioType, signedUrl),
+					embeds.SuccessfulAudioFileUploadEmbed(member, i.Member, audioType, signedURL),
 				},
 			})
+
 			if err != nil {
 				g.logger.Error("error unable to send follow up embed: %v", zap.Error(err))
 				return err
@@ -378,7 +401,9 @@ func (g *greeterRunner) upload(s *discordgo.Session, i *discordgo.InteractionCre
 				g.logger.Error("error attempting to download discord file", zap.Error(err))
 				return err
 			}
+
 			defer resp.Body.Close()
+
 			file, err := util.DownloadFileToTempDirectory(resp.Body)
 			if err != nil {
 				g.logger.Error("error attempting to download temporary file", zap.Error(err))
@@ -394,7 +419,7 @@ func (g *greeterRunner) upload(s *discordgo.Session, i *discordgo.InteractionCre
 			if _, err := g.firebaseAdapter.GetDocumentFromCollection(ctx, collection, memberID); err != nil {
 				if status.Code(err) == codes.NotFound {
 					var err error
-					if collection == WELCOME_COLLECTION {
+					if collection == WelcomeCollection {
 						err = g.firebaseAdapter.CreateDocument(ctx, collection, memberID, firebaseIntroRecord{Name: memberID, IntroArray: []trackRecord{}})
 					} else {
 						err = g.firebaseAdapter.CreateDocument(ctx, collection, memberID, firebaseOutroRecord{Name: memberID, OutroArray: []trackRecord{}})
@@ -414,31 +439,35 @@ func (g *greeterRunner) upload(s *discordgo.Session, i *discordgo.InteractionCre
 				eg.Go(func() error {
 					f, err := os.Open(file.Name())
 					if err != nil {
-						return err
+						return fmt.Errorf("error opening file: %w", err)
 					}
+
 					defer func() {
 						if err := f.Close(); err != nil {
 							g.logger.Error("error closing file", zap.Error(err))
 						}
+
 						if err := util.DeleteFile(f.Name()); err != nil {
 							g.logger.Error("error trying to delete file", zap.Error(err), zap.String("file_name", f.Name()))
 						}
 					}()
 
 					uuid, _ := uuid.NewV7()
-					if err := g.firebaseAdapter.UploadFileToStorage(ctx, BUCKET_NAME, fmt.Sprintf("voicelines/%s", uuid), file, uuid.String()); err != nil {
-						return err
+					if err := g.firebaseAdapter.UploadFileToStorage(ctx, BucketName, fmt.Sprintf("voicelines/%s", uuid), file, uuid.String()); err != nil {
+						return fmt.Errorf("error uploading to file storage %w", err)
 					}
 
 					data := map[string]interface{}{
 						audioListKey: firestore.ArrayUnion(trackRecord{
 							TrackName: uuid.String(),
 							CreatedAt: time.Now(),
-							AddedBy:   i.Member.User.ID}),
+							AddedBy:   i.Member.User.ID,
+						}),
 					}
 					return g.firebaseAdapter.UpdateDocument(ctx, collection, memberID, data)
 				})
 			}
+
 			if err = eg.Wait(); err != nil {
 				g.logger.Error("error creating or uploading files", zap.Error(err))
 				return err
@@ -456,7 +485,6 @@ func (g *greeterRunner) upload(s *discordgo.Session, i *discordgo.InteractionCre
 			}
 
 		}
-
 	}
 	return nil
 }
@@ -464,6 +492,8 @@ func (g *greeterRunner) upload(s *discordgo.Session, i *discordgo.InteractionCre
 func (g *greeterRunner) greeterHandler(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	switch i.ApplicationCommandData().Name {
 	case "upload":
-		g.upload(s, i)
+		if err := g.upload(s, i); err != nil {
+			g.logger.Error("An error occurred during the upload command", zap.Error(err))
+		}
 	}
 }

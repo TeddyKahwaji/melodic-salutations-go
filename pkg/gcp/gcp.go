@@ -2,35 +2,36 @@ package gcp
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 )
 
-type GcpCredentials struct {
-	ClientEmail  string `json:"client_email" structs:"client_email" mapstructure:"client_email"`
-	ClientId     string `json:"client_id" structs:"client_id" mapstructure:"client_id"`
-	PrivateKeyId string `json:"private_key_id" structs:"private_key_id" mapstructure:"private_key_id"`
-	PrivateKey   string `json:"private_key" structs:"private_key" mapstructure:"private_key"`
-	ProjectId    string `json:"project_id" structs:"project_id" mapstructure:"project_id"`
-	Type         string `json:"type" structs:"type" mapstructure:"type"`
+type Credentials struct {
+	ClientEmail  string `json:"client_email"   mapstructure:"clientEmail"   structs:"ClientEmail"`
+	ClientID     string `json:"client_id"      mapstructure:"clientID"      structs:"ClientID"`
+	PrivateKeyID string `json:"private_key_id" mapstructure:"privateKeyID" structs:"PrivateKeyID"`
+	PrivateKey   string `json:"private_key"    mapstructure:"privateKey"    structs:"PrivateKey"`
+	ProjectID    string `json:"project_id"     mapstructure:"projectID"     structs:"ProjectID"`
+	Type         string `json:"type"           mapstructure:"type"           structs:"Type"`
 }
 
 func GetCredentials() ([]byte, error) {
-	projectId := os.Getenv("GCP_PROJECT_ID")
+	projectID := os.Getenv("GCP_PROJECT_ID")
 	privateKey := strings.Join(strings.Split(os.Getenv("GCP_PRIVATE_KEY"), "\\n"), "\n")
 
-	credentials := &GcpCredentials{
+	credentials := &Credentials{
 		ClientEmail:  os.Getenv("GCP_CLIENT_EMAIL"),
-		ClientId:     os.Getenv("GCP_CLIENT_ID"),
-		PrivateKeyId: os.Getenv("GCP_PRIVATE_KEY_ID"),
+		ClientID:     os.Getenv("GCP_CLIENT_ID"),
+		PrivateKeyID: os.Getenv("GCP_PRIVATE_KEY_ID"),
 		PrivateKey:   privateKey,
-		ProjectId:    projectId,
+		ProjectID:    projectID,
 		Type:         "service_account",
 	}
 
 	data, err := json.Marshal(credentials)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error marshalling json %w", err)
 	}
 
 	return data, nil

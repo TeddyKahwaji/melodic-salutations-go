@@ -5,26 +5,26 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"salutations/internal/greeter"
 	"strings"
-
-	firebaseAdapter "salutations/internal/firebase"
-	gcp "salutations/pkg/gcp"
 
 	"cloud.google.com/go/storage"
 	firebase "firebase.google.com/go"
 	"github.com/bwmarrin/discordgo"
-	"github.com/kkdai/youtube/v2"
+	youtube "github.com/kkdai/youtube/v2"
 	"go.uber.org/zap"
 	"google.golang.org/api/option"
+	firebaseAdapter "salutations/internal/firebase"
+	"salutations/internal/greeter"
+	gcp "salutations/pkg/gcp"
 )
 
-const PROJECT_ID = "twitterbot-e7ab0"
-
-var bot *discordgo.Session
-var logger *zap.Logger
-
 func main() {
+	const PROJECT_ID = "twitterbot-e7ab0"
+
+	var bot *discordgo.Session
+
+	var logger *zap.Logger
+
 	env := os.Getenv("ENV")
 	if strings.ToUpper(env) == "PROD" {
 		logger = zap.Must(zap.NewProduction())
@@ -32,61 +32,72 @@ func main() {
 		logger = zap.Must(zap.NewDevelopment())
 	}
 
-	defer logger.Sync()
+	defer func() {
+		if err := logger.Sync(); err != nil {
+			panic(fmt.Errorf("error syncing logger %w", err))
+		}
+	}()
 
 	discordToken := os.Getenv("MELODY_DISCORD_TOKEN")
-	bot, err := discordgo.New(fmt.Sprintf("Bot %s", discordToken))
+
+	bot, err := discordgo.New("Bot " + discordToken)
 	if err != nil {
 		logger.Fatal("bot could not be booted", zap.Error(err))
 	}
+
 	bot.Identify.Intents = discordgo.IntentsAll
 	bot.StateEnabled = true
-	bot.AddHandler(onReady)
+	bot.AddHandler(func(session *discordgo.Session, _ *discordgo.Ready) {
+		ctx := context.Background()
+
+		firebaseAdapter, err := NewFirebaseAdapter(ctx, PROJECT_ID, logger)
+		if err != nil {
+			panic(fmt.Sprintf("error instantiating firebase adapter: %v", err))
+		}
+
+		greeterCog, err := greeter.NewGreeterRunner(logger, &youtube.Client{}, firebaseAdapter)
+		if err != nil {
+			panic(fmt.Sprintf("unable to instantiate greeter cog, %v", err))
+		}
+
+		if err = greeterCog.RegisterCommands(session); err != nil {
+			panic(fmt.Sprintf("error unable to register greeter commands: %v", err))
+		}
+
+		logger.Info("Bot has connected")
+	})
+
 	if err := bot.Open(); err != nil {
 		logger.Fatal("error opening connection", zap.Error(err))
 	}
 
 	defer bot.Close()
+
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt)
 	<-stop
 }
 
-func NewFirebaseAdapter(ctx context.Context, projectId string) (firebaseAdapter.Firebase, error) {
+func NewFirebaseAdapter(ctx context.Context, projectID string, logger *zap.Logger) (firebaseAdapter.Firebase, error) {
 	creds, err := gcp.GetCredentials()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error getting gcp credentials  %w", err)
 	}
-	app, err := firebase.NewApp(ctx, &firebase.Config{ProjectID: projectId}, option.WithCredentialsJSON(creds))
+
+	app, err := firebase.NewApp(ctx, &firebase.Config{ProjectID: projectID}, option.WithCredentialsJSON(creds))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error creating new firebase client %w", err)
 	}
+
 	fsClient, err := app.Firestore(ctx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error creating new firestore client %w", err)
 	}
 
 	storageClient, err := storage.NewClient(ctx, option.WithCredentialsJSON(creds))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error creating new storage client %w", err)
 	}
 
-	return firebaseAdapter.NewFirebaseHelper(fsClient, storageClient), nil
-}
-
-func onReady(s *discordgo.Session, _ *discordgo.Ready) {
-	ctx := context.Background()
-	firebaseAdapter, err := NewFirebaseAdapter(ctx, PROJECT_ID)
-	if err != nil {
-		panic(fmt.Sprintf("error instantiating firebase adapter: %v", err))
-	}
-	greeterCog, err := greeter.NewGreeterRunner(logger, &youtube.Client{}, firebaseAdapter)
-	if err != nil {
-		panic(fmt.Sprintf("unable to instantiate greeter cog, %v", err))
-	}
-	if err = greeterCog.RegisterCommands(s); err != nil {
-		panic(fmt.Sprintf("error unable to register greeter commands: %v", err))
-	}
-
-	logger.Info("Bot has connected")
+	return firebaseAdapter.NewFirebaseHelper(fsClient, storageClient, logger), nil
 }

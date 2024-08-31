@@ -2,6 +2,7 @@ package util
 
 import (
 	"archive/zip"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -11,60 +12,73 @@ import (
 )
 
 func Unzip(src string, dest string) ([]*os.File, error) {
-	r, err := zip.OpenReader(src)
+	zipReader, err := zip.OpenReader(src)
 	if err != nil {
 		return nil, err
 	}
+
 	defer func() {
-		if err := r.Close(); err != nil {
+		if err := zipReader.Close(); err != nil {
 			panic(err)
 		}
 	}()
 
-	os.MkdirAll(dest, 0755)
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		return nil, err
+	}
 
 	// Closure to address file descriptors issue with all the deferred .Close() methods
-	extractAndWriteFile := func(f *zip.File) (*os.File, error) {
-		rc, err := f.Open()
+	extractAndWriteFile := func(file *zip.File) (*os.File, error) {
+		rc, err := file.Open()
 		if err != nil {
 			return nil, err
 		}
 
-		path := filepath.Join(dest, f.Name)
+		path := filepath.Join(dest, file.Name)
 
 		// Check for ZipSlip (Directory traversal)
 		if !strings.HasPrefix(path, filepath.Clean(dest)+string(os.PathSeparator)) {
 			return nil, fmt.Errorf("illegal file path: %s", path)
 		}
 
-		if f.FileInfo().IsDir() {
-			os.MkdirAll(path, f.Mode())
+		if file.FileInfo().IsDir() {
+			if err := os.MkdirAll(path, file.Mode()); err != nil {
+				return nil, err
+			}
 		} else {
-			os.MkdirAll(filepath.Dir(path), f.Mode())
-			f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_SYNC, f.Mode())
+			if err := os.MkdirAll(filepath.Dir(path), file.Mode()); err != nil {
+				return nil, err
+			}
+
+			file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_SYNC, file.Mode())
 			if err != nil {
 				return nil, err
 			}
 
-			if _, err = io.Copy(f, rc); err != nil {
+			if _, err = io.Copy(file, rc); err != nil {
 				return nil, err
 			}
-			if _, err = f.Seek(0, 0); err != nil {
+
+			if _, err = file.Seek(0, 0); err != nil {
 				return nil, err
 			}
-			return f, nil
+
+			return file, nil
 		}
-		return nil, nil
+
+		return nil, errors.New("unexpected error occurred")
 	}
 
 	resultList := []*os.File{}
-	for _, f := range r.File {
+	for _, f := range zipReader.File {
 		file, err := extractAndWriteFile(f)
 		if err != nil {
 			continue
 		}
+
 		resultList = append(resultList, file)
 	}
+
 	return resultList, nil
 }
 
@@ -82,10 +96,12 @@ func DeleteFile(filePath string) error {
 
 func MakeDirectoryAndFile(fileName string) (string, error) {
 	tn := "temp"
-	if err := os.MkdirAll(tn, 0755); err != nil {
+	if err := os.MkdirAll(tn, 0o755); err != nil {
 		return "", err
 	}
+
 	fp := filepath.Join(tn, fileName)
+
 	return fp, nil
 }
 
@@ -96,12 +112,13 @@ func WriteFile(reader io.Reader, fileName string) error {
 	}
 
 	defer f.Close()
+
 	bytes, err := io.ReadAll(reader)
 	if err != nil {
 		return err
 	}
 
-	if err := os.WriteFile(fileName, bytes, 0644); err != nil {
+	if err := os.WriteFile(fileName, bytes, 0o644); err != nil {
 		return err
 	}
 
@@ -125,6 +142,7 @@ func DownloadFileToTempDirectory(data io.Reader) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	if _, err = io.Copy(tempFile, data); err != nil {
 		return nil, err
 	}

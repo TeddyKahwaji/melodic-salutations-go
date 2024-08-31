@@ -9,7 +9,7 @@ import (
 func ErrorMessageEmbed(msg string) *discordgo.MessageEmbed {
 	return &discordgo.MessageEmbed{
 		Title:       "❌ **Invalid usage**",
-		Description: "File must be an mp3 or m4a file!",
+		Description: msg,
 		Color:       0x992D22,
 		Thumbnail: &discordgo.MessageEmbedThumbnail{
 			URL: "https://media.giphy.com/media/11e5gZ6NJ8AB1K/giphy.gif",
@@ -31,7 +31,7 @@ func SuccessfulAudioFileUploadEmbed(memberCreatedFor *discordgo.Member, memberCr
 			URL: memberCreatedFor.AvatarURL(""),
 		},
 		Footer: &discordgo.MessageEmbedFooter{
-			Text:    fmt.Sprintf("Created by: %s", memberCreatedBy.DisplayName()),
+			Text:    "Created by: " + memberCreatedBy.DisplayName(),
 			IconURL: memberCreatedBy.AvatarURL(""),
 		},
 	}
