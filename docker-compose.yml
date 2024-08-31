@@ -1,5 +1,5 @@
 services:
-  spicetunes:
+  mtunes:
     image: mtunes
     build:
       context: .
