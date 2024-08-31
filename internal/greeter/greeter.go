@@ -6,11 +6,14 @@ import (
 	"io"
 	"net/http"
 	"os"
+	cogs "salutations/internal/cogs"
 	"salutations/internal/embeds"
 	firebaseAdapter "salutations/internal/firebase"
 	util "salutations/pkg/util"
 	"sync"
+	"time"
 
+	"cloud.google.com/go/firestore"
 	"github.com/bwmarrin/discordgo"
 	"golang.org/x/exp/rand"
 	"golang.org/x/sync/errgroup"
@@ -95,7 +98,7 @@ var commands []*discordgo.ApplicationCommand = []*discordgo.ApplicationCommand{{
 	},
 }}
 
-func NewGreeterRunner(logger *zap.Logger, ytdlClient *youtube.Client, firebaseAdapter firebaseAdapter.Firebase) (*greeterRunner, error) {
+func NewGreeterRunner(logger *zap.Logger, ytdlClient *youtube.Client, firebaseAdapter firebaseAdapter.Firebase) (cogs.Cogs, error) {
 	songSignals := make(chan *guildPlayer)
 	greeter := &greeterRunner{
 		firebaseAdapter:     firebaseAdapter,
@@ -108,6 +111,10 @@ func NewGreeterRunner(logger *zap.Logger, ytdlClient *youtube.Client, firebaseAd
 	}
 	go greeter.globalPlay()
 	return greeter, nil
+}
+
+func (g *greeterRunner) GetCommands() []*discordgo.ApplicationCommand {
+	return commands
 }
 
 func (g *greeterRunner) RegisterCommands(s *discordgo.Session) error {
@@ -127,10 +134,6 @@ func (g *greeterRunner) globalPlay() {
 	for gp := range g.songSignal {
 		go g.playAudio(gp)
 	}
-}
-
-func (g *greeterRunner) getAudioFileURL(audioFileName string) (string, error) {
-	return g.firebaseAdapter.GenerateSignedUrl(BUCKET_NAME, fmt.Sprintf("voicelines/%s", audioFileName))
 }
 
 func (g *greeterRunner) voiceStateUpdate(s *discordgo.Session, vc *discordgo.VoiceStateUpdate) {
@@ -278,7 +281,19 @@ func (g *greeterRunner) upload(s *discordgo.Session, i *discordgo.InteractionCre
 	})
 
 	options := i.ApplicationCommandData().Options
-	_, _ = options[0].UserValue(s), options[1].StringValue()
+	memberID, audioType := options[0].Value.(string), options[1].Value.(string)
+	member, err := s.State.Member(i.GuildID, memberID)
+	if err != nil {
+		g.logger.Error("error getting member to create audio track for", zap.Error(err), zap.String("user_id", memberID))
+		return err
+	}
+	audioListKey := "outro_array"
+	collection := OUTRO_COLLECTION
+	if audioType == "intro" {
+		collection = WELCOME_COLLECTION
+		audioListKey = "intro_array"
+	}
+
 	fileAttachment := i.ApplicationCommandData().Resolved.Attachments
 	ctx := context.Background()
 	for _, file := range fileAttachment {
@@ -290,17 +305,45 @@ func (g *greeterRunner) upload(s *discordgo.Session, i *discordgo.InteractionCre
 				return err
 			}
 			defer resp.Body.Close()
+
 			file, err := util.DownloadFileToTempDirectory(resp.Body)
+			defer file.Close()
 			if err != nil {
 				g.logger.Error("error attempting to download temporary file", zap.Error(err))
 				return err
 			}
 
 			uuid, _ := uuid.NewV7()
-
-			err = g.firebaseAdapter.UploadFileToStorage(ctx, BUCKET_NAME, fmt.Sprintf("voicelines/%s", uuid), file, uuid.String())
-			if err != nil {
+			uuid_string := uuid.String()
+			if err := g.firebaseAdapter.UploadFileToStorage(ctx, BUCKET_NAME, fmt.Sprintf("voicelines/%s", uuid_string), file, uuid_string); err != nil {
 				g.logger.Error("error attempting to upload to firebase", zap.Error(err))
+				return err
+			}
+
+			data := map[string]interface{}{
+				audioListKey: firestore.ArrayUnion(map[string]string{"track_name": uuid_string,
+					"created_at": time.Now().String(),
+					"added_by":   i.Member.User.ID}),
+				"name": memberID,
+			}
+
+			if err := g.firebaseAdapter.UpdateDocument(ctx, collection, memberID, data); err != nil {
+				g.logger.Error("error updating document", zap.Error(err), zap.String("collection", collection), zap.String("user_id", memberID), zap.Any("data", data))
+				return err
+			}
+
+			signedUrl, err := g.firebaseAdapter.GenerateSignedUrl(BUCKET_NAME, fmt.Sprintf("voicelines/%s", uuid_string))
+			if err != nil {
+				g.logger.Error("error generating signed url", zap.Error(err), zap.String("member_created_for", member.User.ID), zap.String("member_created_by", i.Member.User.ID))
+				return err
+			}
+			_, err = s.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
+				Embeds: []*discordgo.MessageEmbed{
+					embeds.SuccessfulAudioFileUploadEmbed(member, i.Member, audioType, signedUrl),
+				},
+			})
+			if err != nil {
+				g.logger.Error("error unable to send follow up embed: %v", zap.Error(err))
 				return err
 			}
 		case zip:

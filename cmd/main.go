@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"salutations/pkg/greeter"
+	"salutations/internal/greeter"
 	"strings"
 
 	firebaseAdapter "salutations/internal/firebase"
@@ -39,6 +39,8 @@ func main() {
 	if err != nil {
 		logger.Fatal("bot could not be booted", zap.Error(err))
 	}
+	bot.Identify.Intents = discordgo.IntentGuildMembers | discordgo.IntentsGuilds
+	bot.StateEnabled = true
 	bot.AddHandler(onReady)
 	if err := bot.Open(); err != nil {
 		logger.Fatal("error opening connection", zap.Error(err))

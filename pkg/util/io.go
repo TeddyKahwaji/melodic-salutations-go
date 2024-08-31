@@ -125,7 +125,6 @@ func DownloadFileToTempDirectory(data io.Reader) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer tempFile.Close()
 	if _, err = io.Copy(tempFile, data); err != nil {
 		return nil, err
 	}
