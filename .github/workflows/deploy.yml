@@ -12,7 +12,7 @@ jobs:
         uses: bitovi/github-actions-deploy-docker-to-ec2@v1.0.1
         with:
           aws_ec2_instance_type: t2.micro
-          env_ghs: ${{ secrets.MELODY_DISCORD_TOKEN }} ${{secrets.GCP_CLIENT_EMAIL}} ${{secrets.GCP_PRIVATE_KEY_ID}} ${{secrets.GCP_PROJECT_ID}} ${{secrets.GCP_CLIENT_ID}}
+          env_ghs: ${{ secrets.MELODY_DISCORD_TOKEN }} ${{secrets.GCP_CLIENT_EMAIL}} ${{secrets.GCP_PRIVATE_KEY}} ${{secrets.GCP_PRIVATE_KEY_ID}} ${{secrets.GCP_PROJECT_ID}} ${{secrets.GCP_CLIENT_ID}}
           aws_secret_access_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws_access_key_id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws_default_region: us-east-1
