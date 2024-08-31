@@ -29,11 +29,6 @@ func Unzip(src string, dest string) ([]*os.File, error) {
 		if err != nil {
 			return nil, err
 		}
-		defer func() {
-			if err := rc.Close(); err != nil {
-				panic(err)
-			}
-		}()
 
 		path := filepath.Join(dest, f.Name)
 
@@ -46,18 +41,15 @@ func Unzip(src string, dest string) ([]*os.File, error) {
 			os.MkdirAll(path, f.Mode())
 		} else {
 			os.MkdirAll(filepath.Dir(path), f.Mode())
-			f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
+			f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_SYNC, f.Mode())
 			if err != nil {
 				return nil, err
 			}
-			defer func() {
-				if err := f.Close(); err != nil {
-					panic(err)
-				}
-			}()
 
-			_, err = io.Copy(f, rc)
-			if err != nil {
+			if _, err = io.Copy(f, rc); err != nil {
+				return nil, err
+			}
+			if _, err = f.Seek(0, 0); err != nil {
 				return nil, err
 			}
 			return f, nil
@@ -69,7 +61,7 @@ func Unzip(src string, dest string) ([]*os.File, error) {
 	for _, f := range r.File {
 		file, err := extractAndWriteFile(f)
 		if err != nil {
-			return nil, err
+			continue
 		}
 		resultList = append(resultList, file)
 	}
@@ -143,4 +135,10 @@ func DownloadFileToTempDirectory(data io.Reader) (*os.File, error) {
 	}
 
 	return tempFile, nil
+}
+
+func GetDirectoryFromFileName(fileName string) string {
+	splitPath := strings.Split(fileName, "/")
+
+	return strings.Join(splitPath[:len(splitPath)-1], "/")
 }

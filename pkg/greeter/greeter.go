@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"salutations/internal/embeds"
 	firebaseAdapter "salutations/internal/firebase"
 	util "salutations/pkg/util"
@@ -22,7 +23,8 @@ import (
 
 const (
 	WELCOME_COLLECTION string = "welcomeIntros"
-	BUCKET_NAME               = "twitterbot-e7ab0.appspot.com"
+	OUTRO_COLLECTION   string = "byeOutros"
+	BUCKET_NAME        string = "twitterbot-e7ab0.appspot.com"
 )
 
 type FileType string
@@ -132,29 +134,50 @@ func (g *greeterRunner) getAudioFileURL(audioFileName string) (string, error) {
 }
 
 func (g *greeterRunner) voiceStateUpdate(s *discordgo.Session, vc *discordgo.VoiceStateUpdate) {
-	hasJoined := vc.BeforeUpdate == nil && !vc.VoiceState.Member.User.Bot && vc.VoiceState != nil
-	if hasJoined {
-		ctx := context.Background()
-		if _, ok := g.guildPlayerMappings[vc.GuildID]; !ok {
-			channelVoiceConnection, err := s.ChannelVoiceJoin(vc.GuildID, vc.ChannelID, false, true)
-			if err != nil {
-				g.logger.Error("error unable to join voice channel", zap.String("channel_id", vc.ChannelID), zap.String("guild_id", vc.GuildID), zap.Error(err))
-				return
-			}
-			g.guildPlayerMappings[vc.GuildID] = &guildPlayer{
-				guildID:     vc.GuildID,
-				voiceClient: channelVoiceConnection,
-				queue:       []string{},
-				voiceState:  NOT_PLAYING,
+	hasJoined := vc.BeforeUpdate == nil && !vc.VoiceState.Member.User.Bot && vc.ChannelID != ""
+	hasLeft := vc.BeforeUpdate != nil && !vc.Member.User.Bot && vc.ChannelID == ""
+
+	if hasLeft {
+		channel, err := s.Channel(vc.BeforeUpdate.ChannelID)
+		if err != nil {
+			g.logger.Error("error getting channel", zap.Error(err), zap.String("channel_id", vc.BeforeUpdate.ChannelID))
+			return
+		}
+		if channel.MemberCount == 0 && vc.VoiceState != nil {
+			if vc, ok := s.VoiceConnections[vc.GuildID]; ok {
+				vc.Disconnect()
 			}
 		}
+	}
 
-		randomAudioTrack, err := g.retrieveRandomAudioName(ctx, WELCOME_COLLECTION, vc.UserID)
+	if _, ok := g.guildPlayerMappings[vc.GuildID]; !ok {
+		channelVoiceConnection, err := s.ChannelVoiceJoin(vc.GuildID, vc.ChannelID, false, true)
+		if err != nil {
+			g.logger.Error("error unable to join voice channel", zap.String("channel_id", vc.ChannelID), zap.String("guild_id", vc.GuildID), zap.Error(err))
+			return
+		}
+		g.guildPlayerMappings[vc.GuildID] = &guildPlayer{
+			guildID:     vc.GuildID,
+			voiceClient: channelVoiceConnection,
+			queue:       []string{},
+			voiceState:  NOT_PLAYING,
+		}
+	}
+
+	var COLLECTION string
+	if hasJoined {
+		COLLECTION = WELCOME_COLLECTION
+	} else {
+		COLLECTION = OUTRO_COLLECTION
+	}
+
+	ctx := context.Background()
+	if hasJoined || hasLeft {
+		randomAudioTrack, err := g.retrieveRandomAudioName(ctx, COLLECTION, vc.UserID)
 		if err != nil {
 			g.logger.Error("failed to get random audio track from firestore", zap.Error(err))
 			return
 		}
-
 		audioBytes, err := g.firebaseAdapter.DownloadFileBytes(ctx, BUCKET_NAME, fmt.Sprintf("voicelines/%v", randomAudioTrack))
 		if err != nil {
 			g.logger.Error("failed to get audio bytes from storage", zap.Error(err))
@@ -210,7 +233,11 @@ func (g *greeterRunner) playAudio(guildPlayer *guildPlayer) {
 	guildPlayer.queue = guildPlayer.queue[1:]
 	g.guildsMutex.Unlock()
 
-	defer util.DeleteFile(audioPath)
+	defer func() {
+		if err := util.DeleteFile(audioPath); err != nil {
+			g.logger.Error("error trying to delete file", zap.Error(err), zap.String("file_name", audioPath))
+		}
+	}()
 
 	opts := dca.StdEncodeOptions
 	opts.RawOutput = true
@@ -218,7 +245,7 @@ func (g *greeterRunner) playAudio(guildPlayer *guildPlayer) {
 
 	es, err := dca.EncodeFile(audioPath, opts)
 	if err != nil {
-		g.logger.Error(err.Error())
+		g.logger.Error("error encoding file", zap.Error(err))
 		return
 	}
 
@@ -228,7 +255,6 @@ func (g *greeterRunner) playAudio(guildPlayer *guildPlayer) {
 	guildPlayer.voiceState = PLAYING
 	for err := range doneChan {
 		if err != nil && err != io.EOF {
-			g.logger.Error(err.Error())
 			return
 		}
 		g.guildsMutex.Lock()
@@ -286,7 +312,7 @@ func (g *greeterRunner) upload(s *discordgo.Session, i *discordgo.InteractionCre
 				return err
 			}
 
-			fileList, err := util.Unzip(file.Name(), "temp")
+			fileList, err := util.Unzip(file.Name(), util.GetDirectoryFromFileName(file.Name()))
 			if err != nil {
 				g.logger.Error("error unzipping inputted zip", zap.Error(err))
 				return err
@@ -294,6 +320,17 @@ func (g *greeterRunner) upload(s *discordgo.Session, i *discordgo.InteractionCre
 			eg, ctx := errgroup.WithContext(ctx)
 			for _, file := range fileList {
 				eg.Go(func() error {
+					f, err := os.Open(file.Name())
+					if err != nil {
+						return err
+					}
+					defer func() {
+						f.Close()
+						if err := util.DeleteFile(f.Name()); err != nil {
+							g.logger.Error("error trying to delete file", zap.Error(err), zap.String("file_name", f.Name()))
+						}
+					}()
+
 					uuid, _ := uuid.NewV7()
 					return g.firebaseAdapter.UploadFileToStorage(ctx, BUCKET_NAME, fmt.Sprintf("voicelines/%s", uuid), file, uuid.String())
 				})
