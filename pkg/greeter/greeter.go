@@ -145,23 +145,13 @@ func (g *greeterRunner) voiceStateUpdate(s *discordgo.Session, vc *discordgo.Voi
 		}
 		if channel.MemberCount == 0 && vc.VoiceState != nil {
 			if vc, ok := s.VoiceConnections[vc.GuildID]; ok {
+				g.guildsMutex.Lock()
 				vc.Disconnect()
+				delete(g.guildPlayerMappings, vc.GuildID)
+				g.guildsMutex.Unlock()
 			}
 		}
-	}
-
-	if _, ok := g.guildPlayerMappings[vc.GuildID]; !ok {
-		channelVoiceConnection, err := s.ChannelVoiceJoin(vc.GuildID, vc.ChannelID, false, true)
-		if err != nil {
-			g.logger.Error("error unable to join voice channel", zap.String("channel_id", vc.ChannelID), zap.String("guild_id", vc.GuildID), zap.Error(err))
-			return
-		}
-		g.guildPlayerMappings[vc.GuildID] = &guildPlayer{
-			guildID:     vc.GuildID,
-			voiceClient: channelVoiceConnection,
-			queue:       []string{},
-			voiceState:  NOT_PLAYING,
-		}
+		return
 	}
 
 	var COLLECTION string
@@ -173,12 +163,27 @@ func (g *greeterRunner) voiceStateUpdate(s *discordgo.Session, vc *discordgo.Voi
 
 	ctx := context.Background()
 	if hasJoined || hasLeft {
+		g.guildsMutex.Lock()
+		if _, ok := g.guildPlayerMappings[vc.GuildID]; !ok {
+			channelVoiceConnection, err := s.ChannelVoiceJoin(vc.GuildID, vc.ChannelID, false, true)
+			if err != nil {
+				g.logger.Error("error unable to join voice channel", zap.String("channel_id", vc.ChannelID), zap.String("guild_id", vc.GuildID), zap.Error(err))
+				return
+			}
+			g.guildPlayerMappings[vc.GuildID] = &guildPlayer{
+				guildID:     vc.GuildID,
+				voiceClient: channelVoiceConnection,
+				queue:       []string{},
+				voiceState:  NOT_PLAYING,
+			}
+		}
+
 		randomAudioTrack, err := g.retrieveRandomAudioName(ctx, COLLECTION, vc.UserID)
 		if err != nil {
 			g.logger.Error("failed to get random audio track from firestore", zap.Error(err))
 			return
 		}
-		audioBytes, err := g.firebaseAdapter.DownloadFileBytes(ctx, BUCKET_NAME, fmt.Sprintf("voicelines/%v", randomAudioTrack))
+		audioBytes, err := g.firebaseAdapter.DownloadFileBytes(ctx, BUCKET_NAME, fmt.Sprintf("voicelines/%s", randomAudioTrack))
 		if err != nil {
 			g.logger.Error("failed to get audio bytes from storage", zap.Error(err))
 			return
@@ -190,9 +195,8 @@ func (g *greeterRunner) voiceStateUpdate(s *discordgo.Session, vc *discordgo.Voi
 			return
 		}
 
-		g.guildsMutex.RLock()
 		g.guildPlayerMappings[vc.GuildID].queue = append(g.guildPlayerMappings[vc.GuildID].queue, file.Name())
-		g.guildsMutex.RUnlock()
+		g.guildsMutex.Unlock()
 		if g.guildPlayerMappings[vc.GuildID].voiceState == NOT_PLAYING {
 			g.songSignal <- g.guildPlayerMappings[vc.GuildID]
 		}
