@@ -28,7 +28,7 @@ type firebaseAdapter struct {
 	logger             *zap.Logger
 }
 
-func NewFirebaseHelper(firestoreClient *fs.Client, storageClient *gs.Client, logger *zap.Logger) Firebase {
+func NewFirebaseHelper(firestoreClient *fs.Client, storageClient *gs.Client, logger *zap.Logger) *firebaseAdapter {
 	return &firebaseAdapter{
 		firestoreClient:    firestoreClient,
 		cloudStorageClient: storageClient,
@@ -66,6 +66,7 @@ func (f *firebaseAdapter) GetDocumentFromCollection(ctx context.Context, collect
 
 func (f *firebaseAdapter) CreateDocument(ctx context.Context, collection string, document string, data interface{}) error {
 	_, err := f.firestoreClient.Collection(collection).Doc(document).Create(ctx, data)
+
 	return err
 }
 
@@ -82,6 +83,7 @@ func (f *firebaseAdapter) UpdateDocument(ctx context.Context, collection string,
 	if _, err := f.firestoreClient.Collection(collection).Doc(document).Update(ctx, updates); err != nil {
 		return fmt.Errorf("error updating document: %w", err)
 	}
+
 	return nil
 }
 

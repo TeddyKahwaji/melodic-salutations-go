@@ -36,3 +36,28 @@ func SuccessfulAudioFileUploadEmbed(memberCreatedFor *discordgo.Member, memberCr
 		},
 	}
 }
+
+func SuccessfulAudioZipUploadEmbed(memberCreatedFor *discordgo.Member, memberCreatedBy *discordgo.Member, audioType string, urls []string) *discordgo.MessageEmbed {
+	embedFields := []*discordgo.MessageEmbedField{}
+
+	for i, url := range urls {
+		embedFields = append(embedFields, &discordgo.MessageEmbedField{
+			Name:   "",
+			Value:  fmt.Sprintf("%s's new [Voiceline %d](%s) 🎤!", memberCreatedFor.User.Username, i+1, url),
+			Inline: false,
+		})
+	}
+
+	return &discordgo.MessageEmbed{
+		Title: fmt.Sprintf("🎤 %d Voiceline %ss Successfully Created 🎤", len(urls), audioType),
+		Color: 0x67e9ff,
+		Thumbnail: &discordgo.MessageEmbedThumbnail{
+			URL: memberCreatedFor.AvatarURL(""),
+		},
+		Footer: &discordgo.MessageEmbedFooter{
+			Text:    "Created by: " + memberCreatedBy.DisplayName(),
+			IconURL: memberCreatedBy.AvatarURL(""),
+		},
+		Fields: embedFields,
+	}
+}

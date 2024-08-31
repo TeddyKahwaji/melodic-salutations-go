@@ -10,6 +10,11 @@ import (
 	"sync"
 	"time"
 
+	cogs "salutations/internal/cogs"
+	"salutations/internal/embeds"
+	firebaseAdapter "salutations/internal/firebase"
+	util "salutations/pkg/util"
+
 	"cloud.google.com/go/firestore"
 	"github.com/bwmarrin/discordgo"
 	"github.com/google/uuid"
@@ -20,10 +25,6 @@ import (
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	cogs "salutations/internal/cogs"
-	"salutations/internal/embeds"
-	firebaseAdapter "salutations/internal/firebase"
-	util "salutations/pkg/util"
 )
 
 const (
@@ -43,8 +44,8 @@ const (
 type voiceState string
 
 const (
-	PLAYING     voiceState = "PLAYING"
-	NOT_PLAYING voiceState = "NOT_PLAYING"
+	Playing    voiceState = "PLAYING"
+	NotPlaying voiceState = "NOT_PLAYING"
 )
 
 type guildPlayer struct {
@@ -198,7 +199,7 @@ func (g *greeterRunner) voiceUpdate(s *discordgo.Session, vc *discordgo.VoiceSta
 				guildID:     vc.GuildID,
 				voiceClient: channelVoiceConnection,
 				queue:       []string{},
-				voiceState:  NOT_PLAYING,
+				voiceState:  NotPlaying,
 			}
 		}
 
@@ -223,7 +224,7 @@ func (g *greeterRunner) voiceUpdate(s *discordgo.Session, vc *discordgo.VoiceSta
 		g.guildPlayerMappings[vc.GuildID].queue = append(g.guildPlayerMappings[vc.GuildID].queue, file.Name())
 		g.guildsMutex.Unlock()
 
-		if g.guildPlayerMappings[vc.GuildID].voiceState == NOT_PLAYING {
+		if g.guildPlayerMappings[vc.GuildID].voiceState == NotPlaying {
 			g.songSignal <- g.guildPlayerMappings[vc.GuildID]
 		}
 	}
@@ -261,7 +262,7 @@ func (g *greeterRunner) playAudio(guildPlayer *guildPlayer) {
 	}
 
 	g.guildsMutex.Lock()
-	guildPlayer.voiceState = PLAYING
+	guildPlayer.voiceState = Playing
 	audioPath := guildPlayer.queue[0]
 	guildPlayer.queue = guildPlayer.queue[1:]
 	g.guildsMutex.Unlock()
@@ -286,7 +287,7 @@ func (g *greeterRunner) playAudio(guildPlayer *guildPlayer) {
 
 	doneChan := make(chan error)
 	guildPlayer.stream = dca.NewStream(es, guildPlayer.voiceClient, doneChan)
-	guildPlayer.voiceState = PLAYING
+	guildPlayer.voiceState = Playing
 
 	for err := range doneChan {
 		if err != nil && errors.Is(err, io.EOF) {
@@ -297,7 +298,7 @@ func (g *greeterRunner) playAudio(guildPlayer *guildPlayer) {
 		if len(guildPlayer.queue) > 0 {
 			g.songSignal <- guildPlayer
 		} else {
-			guildPlayer.voiceState = NOT_PLAYING
+			guildPlayer.voiceState = NotPlaying
 		}
 		g.guildsMutex.Unlock()
 	}
@@ -434,6 +435,10 @@ func (g *greeterRunner) upload(s *discordgo.Session, i *discordgo.InteractionCre
 				}
 			}
 
+			var mutex sync.Mutex
+
+			urlsCreated := make([]string, 0, len(fileList))
+
 			eg, ctx := errgroup.WithContext(ctx)
 			for _, file := range fileList {
 				eg.Go(func() error {
@@ -464,12 +469,38 @@ func (g *greeterRunner) upload(s *discordgo.Session, i *discordgo.InteractionCre
 							AddedBy:   i.Member.User.ID,
 						}),
 					}
-					return g.firebaseAdapter.UpdateDocument(ctx, collection, memberID, data)
+
+					if err := g.firebaseAdapter.UpdateDocument(ctx, collection, memberID, data); err != nil {
+						return fmt.Errorf("error updating document %w", err)
+					}
+
+					// TODO: Shorten Urls
+					signedURL, err := g.firebaseAdapter.GenerateSignedURL(BucketName, fmt.Sprintf("voicelines/%s", uuid.String()))
+					if err != nil {
+						g.logger.Error("error generating signed url", zap.Error(err), zap.String("member_created_for", member.User.ID), zap.String("member_created_by", i.Member.User.ID))
+						return fmt.Errorf("error generating signed url %w", err)
+					}
+
+					mutex.Lock()
+					urlsCreated = append(urlsCreated, signedURL)
+					mutex.Unlock()
+					return nil
 				})
 			}
 
-			if err = eg.Wait(); err != nil {
-				g.logger.Error("error creating or uploading files", zap.Error(err))
+			if err = eg.Wait(); err != nil || len(urlsCreated) == 0 {
+				g.logger.Error("error creating or uploading files", zap.Error(err), zap.String("member_created_for", member.User.ID), zap.String("member_created_by", i.Member.User.ID))
+				return err
+			}
+
+			_, err = s.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
+				Embeds: []*discordgo.MessageEmbed{
+					embeds.SuccessfulAudioZipUploadEmbed(member, i.Member, audioType, urlsCreated),
+				},
+			})
+
+			if err != nil {
+				g.logger.Error("error unable to send follow up embed: %v", zap.Error(err))
 				return err
 			}
 
@@ -483,9 +514,9 @@ func (g *greeterRunner) upload(s *discordgo.Session, i *discordgo.InteractionCre
 				g.logger.Error("unable to send follow up embed: %v", zap.Error(err))
 				return err
 			}
-
 		}
 	}
+
 	return nil
 }
 

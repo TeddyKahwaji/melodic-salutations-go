@@ -7,15 +7,16 @@ import (
 	"os/signal"
 	"strings"
 
+	firebaseAdapter "salutations/internal/firebase"
+	"salutations/internal/greeter"
+	gcp "salutations/pkg/gcp"
+
 	"cloud.google.com/go/storage"
 	firebase "firebase.google.com/go"
 	"github.com/bwmarrin/discordgo"
 	youtube "github.com/kkdai/youtube/v2"
 	"go.uber.org/zap"
 	"google.golang.org/api/option"
-	firebaseAdapter "salutations/internal/firebase"
-	"salutations/internal/greeter"
-	gcp "salutations/pkg/gcp"
 )
 
 func main() {
