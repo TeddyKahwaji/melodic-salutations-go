@@ -437,7 +437,7 @@ func (g *greeterRunner) upload(s *discordgo.Session, i *discordgo.InteractionCre
 
 			var mutex sync.Mutex
 
-			urlsCreated := make([]string, 0, len(fileList))
+			urlsCreated := []string{}
 
 			eg, ctx := errgroup.WithContext(ctx)
 			for _, file := range fileList {
