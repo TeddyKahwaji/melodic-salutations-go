@@ -14,7 +14,7 @@ import (
 func Unzip(src string, dest string) ([]*os.File, error) {
 	zipReader, err := zip.OpenReader(src)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error opening zip reader %w", err)
 	}
 
 	defer func() {
@@ -38,7 +38,7 @@ func Unzip(src string, dest string) ([]*os.File, error) {
 
 		// Check for ZipSlip (Directory traversal)
 		if !strings.HasPrefix(path, filepath.Clean(dest)+string(os.PathSeparator)) {
-			return nil, fmt.Errorf("illegal file path: %s", path)
+			return nil, errors.New("illegal file path")
 		}
 
 		if file.FileInfo().IsDir() {
@@ -70,6 +70,7 @@ func Unzip(src string, dest string) ([]*os.File, error) {
 	}
 
 	resultList := []*os.File{}
+
 	for _, f := range zipReader.File {
 		file, err := extractAndWriteFile(f)
 		if err != nil {

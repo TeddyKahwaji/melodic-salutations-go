@@ -30,6 +30,8 @@ import (
 const (
 	WelcomeCollection string = "welcomeIntros"
 	OutroCollection   string = "byeOutros"
+	IntroArrayKey     string = "intro_array"
+	OutroArrayKey     string = "outro_array"
 	BucketName        string = "twitterbot-e7ab0.appspot.com"
 )
 
@@ -48,6 +50,11 @@ const (
 	NotPlaying voiceState = "NOT_PLAYING"
 )
 
+type paginationState struct {
+	CurrentPage int
+	Pages       []*discordgo.MessageEmbed
+}
+
 type guildPlayer struct {
 	guildID     string
 	voiceClient *discordgo.VoiceConnection
@@ -63,14 +70,16 @@ type greeterRunner struct {
 	ytdlClient          *youtube.Client
 	songSignal          chan *guildPlayer
 	guildPlayerMappings map[string]*guildPlayer
-	guildsMutex         sync.RWMutex
+	sync.RWMutex
+	messageStore map[string]*paginationState
 }
 
 type trackRecord struct {
-	AddedBy   string    `firestore:"added_by"`
-	CreatedAt time.Time `firestore:"created_at"`
-	TrackName string    `firestore:"track_name"`
+	AddedBy   string    `firestore:"added_by"    mapstructure:"added_by"`
+	CreatedAt time.Time `firestore:"created_at"  mapstructure:"created_at"`
+	TrackName string    `firestore:"track_name"  mapstructure:"track_name"`
 }
+
 type firebaseIntroRecord struct {
 	Name       string        `firestore:"name"`
 	IntroArray []trackRecord `firestore:"intro_array"`
@@ -90,7 +99,7 @@ func NewGreeterRunner(logger *zap.Logger, ytdlClient *youtube.Client, firebaseAd
 		ytdlClient:          ytdlClient,
 		songSignal:          songSignals,
 		guildPlayerMappings: make(map[string]*guildPlayer),
-		guildsMutex:         sync.RWMutex{},
+		messageStore:        make(map[string]*paginationState),
 	}
 
 	go greeter.globalPlay()
@@ -134,16 +143,45 @@ func (g *greeterRunner) GetCommands() []*discordgo.ApplicationCommand {
 				},
 			},
 		},
+		{
+			Name:        "voicelines",
+			Description: "View the voicelines of a user from your server",
+			Options: []*discordgo.ApplicationCommandOption{
+				{
+					Name:        "member",
+					Description: "A member from your server",
+					Type:        discordgo.ApplicationCommandOptionUser,
+					Required:    true,
+				},
+				{
+					Name:        "type",
+					Type:        discordgo.ApplicationCommandOptionString,
+					Description: "The voiceline type you would like view",
+					Required:    true,
+					Choices: []*discordgo.ApplicationCommandOptionChoice{
+						{
+							Name:  "Intro",
+							Value: "intro",
+						},
+						{
+							Name:  "Outro",
+							Value: "outro",
+						},
+					},
+				},
+			},
+		},
 	}
 }
 
-func (g *greeterRunner) RegisterCommands(s *discordgo.Session) error {
-	if _, err := s.ApplicationCommandBulkOverwrite(s.State.Application.ID, "", g.GetCommands()); err != nil {
+func (g *greeterRunner) RegisterCommands(session *discordgo.Session) error {
+	if _, err := session.ApplicationCommandBulkOverwrite(session.State.Application.ID, "", g.GetCommands()); err != nil {
 		return err
 	}
 
-	s.AddHandler(g.greeterHandler)
-	s.AddHandler(g.voiceUpdate)
+	session.AddHandler(g.greeterHandler)
+	session.AddHandler(g.voiceUpdate)
+	session.AddHandler(g.messageComponentHandler)
 	return nil
 }
 
@@ -153,29 +191,30 @@ func (g *greeterRunner) globalPlay() {
 	}
 }
 
-func (g *greeterRunner) voiceUpdate(s *discordgo.Session, vc *discordgo.VoiceStateUpdate) {
+func (g *greeterRunner) voiceUpdate(session *discordgo.Session, vc *discordgo.VoiceStateUpdate) {
 	hasJoined := vc.BeforeUpdate == nil && !vc.VoiceState.Member.User.Bot && vc.ChannelID != ""
 	hasLeft := vc.BeforeUpdate != nil && !vc.Member.User.Bot && vc.ChannelID == ""
 
 	if hasLeft {
-		channel, err := s.Channel(vc.BeforeUpdate.ChannelID)
+		channel, err := session.Channel(vc.BeforeUpdate.ChannelID)
 		if err != nil {
 			g.logger.Error("error getting channel", zap.Error(err), zap.String("channel_id", vc.BeforeUpdate.ChannelID))
 			return
 		}
 
 		if channel.MemberCount == 0 && vc.VoiceState != nil {
-			if vc, ok := s.VoiceConnections[vc.GuildID]; ok {
-				g.guildsMutex.Lock()
+			if vc, ok := session.VoiceConnections[vc.GuildID]; ok {
+				g.Lock()
 				if err := vc.Disconnect(); err != nil {
 					g.logger.Error("error disconnecting from channel", zap.Error(err), zap.String("channel_id", vc.ChannelID))
 					return
 				}
 
 				delete(g.guildPlayerMappings, vc.GuildID)
-				g.guildsMutex.Unlock()
+				g.Unlock()
 			}
 		}
+
 		return
 	}
 
@@ -188,9 +227,9 @@ func (g *greeterRunner) voiceUpdate(s *discordgo.Session, vc *discordgo.VoiceSta
 
 	ctx := context.Background()
 	if hasJoined || hasLeft {
-		g.guildsMutex.Lock()
+		g.Lock()
 		if _, ok := g.guildPlayerMappings[vc.GuildID]; !ok {
-			channelVoiceConnection, err := s.ChannelVoiceJoin(vc.GuildID, vc.ChannelID, false, true)
+			channelVoiceConnection, err := session.ChannelVoiceJoin(vc.GuildID, vc.ChannelID, false, true)
 			if err != nil {
 				g.logger.Error("error unable to join voice channel", zap.String("channel_id", vc.ChannelID), zap.String("guild_id", vc.GuildID), zap.Error(err))
 				return
@@ -222,7 +261,7 @@ func (g *greeterRunner) voiceUpdate(s *discordgo.Session, vc *discordgo.VoiceSta
 		}
 
 		g.guildPlayerMappings[vc.GuildID].queue = append(g.guildPlayerMappings[vc.GuildID].queue, file.Name())
-		g.guildsMutex.Unlock()
+		g.Unlock()
 
 		if g.guildPlayerMappings[vc.GuildID].voiceState == NotPlaying {
 			g.songSignal <- g.guildPlayerMappings[vc.GuildID]
@@ -230,18 +269,16 @@ func (g *greeterRunner) voiceUpdate(s *discordgo.Session, vc *discordgo.VoiceSta
 	}
 }
 
+// TODO: Reduce complexity here
 func (g *greeterRunner) retrieveRandomAudioName(ctx context.Context, collection string, userId string) (string, error) {
 	data, err := g.firebaseAdapter.GetDocumentFromCollection(ctx, collection, userId)
 	if err != nil {
 		return "", err
 	}
 
-	var audioListKey string
-
+	audioListKey := OutroArrayKey
 	if collection == WelcomeCollection {
-		audioListKey = "intro_array"
-	} else {
-		audioListKey = "outro_array"
+		audioListKey = IntroArrayKey
 	}
 
 	if audioArray, ok := data[audioListKey]; ok {
@@ -261,11 +298,11 @@ func (g *greeterRunner) playAudio(guildPlayer *guildPlayer) {
 		return
 	}
 
-	g.guildsMutex.Lock()
+	g.Lock()
 	guildPlayer.voiceState = Playing
 	audioPath := guildPlayer.queue[0]
 	guildPlayer.queue = guildPlayer.queue[1:]
-	g.guildsMutex.Unlock()
+	g.Unlock()
 
 	defer func() {
 		if err := util.DeleteFile(audioPath); err != nil {
@@ -294,28 +331,28 @@ func (g *greeterRunner) playAudio(guildPlayer *guildPlayer) {
 			return
 		}
 
-		g.guildsMutex.Lock()
+		g.Lock()
 		if len(guildPlayer.queue) > 0 {
 			g.songSignal <- guildPlayer
 		} else {
 			guildPlayer.voiceState = NotPlaying
 		}
-		g.guildsMutex.Unlock()
+		g.Unlock()
 	}
 }
 
-func (g *greeterRunner) upload(s *discordgo.Session, i *discordgo.InteractionCreate) error {
-	if err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+func (g *greeterRunner) upload(session *discordgo.Session, interaction *discordgo.InteractionCreate) error {
+	if err := session.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
 	}); err != nil {
 		g.logger.Error("error attempting to defer message in upload command", zap.Error(err))
 		return err
 	}
 
-	options := i.ApplicationCommandData().Options
+	options := interaction.ApplicationCommandData().Options
 	memberID, audioType := options[0].Value.(string), options[1].Value.(string)
 
-	member, err := s.State.Member(i.GuildID, memberID)
+	member, err := session.State.Member(interaction.GuildID, memberID)
 	if err != nil {
 		g.logger.Error("error getting member to create audio track for", zap.Error(err), zap.String("user_id", memberID))
 		return err
@@ -329,7 +366,7 @@ func (g *greeterRunner) upload(s *discordgo.Session, i *discordgo.InteractionCre
 		audioListKey = "intro_array"
 	}
 
-	fileAttachment := i.ApplicationCommandData().Resolved.Attachments
+	fileAttachment := interaction.ApplicationCommandData().Resolved.Attachments
 	ctx := context.Background()
 
 	for _, file := range fileAttachment {
@@ -371,7 +408,7 @@ func (g *greeterRunner) upload(s *discordgo.Session, i *discordgo.InteractionCre
 				audioListKey: firestore.ArrayUnion(map[string]string{
 					"track_name": uuid.String(),
 					"created_at": time.Now().String(),
-					"added_by":   i.Member.User.ID,
+					"added_by":   interaction.Member.User.ID,
 				}),
 				"name": memberID,
 			}
@@ -383,12 +420,12 @@ func (g *greeterRunner) upload(s *discordgo.Session, i *discordgo.InteractionCre
 
 			signedURL, err := g.firebaseAdapter.GenerateSignedURL(BucketName, fmt.Sprintf("voicelines/%s", uuid.String()))
 			if err != nil {
-				g.logger.Error("error generating signed url", zap.Error(err), zap.String("member_created_for", member.User.ID), zap.String("member_created_by", i.Member.User.ID))
+				g.logger.Error("error generating signed url", zap.Error(err), zap.String("member_created_for", member.User.ID), zap.String("member_created_by", interaction.Member.User.ID))
 				return err
 			}
-			_, err = s.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
+			_, err = session.FollowupMessageCreate(interaction.Interaction, true, &discordgo.WebhookParams{
 				Embeds: []*discordgo.MessageEmbed{
-					embeds.SuccessfulAudioFileUploadEmbed(member, i.Member, audioType, signedURL),
+					embeds.SuccessfulAudioFileUploadEmbed(member, interaction.Member, audioType, signedURL),
 				},
 			})
 
@@ -435,7 +472,6 @@ func (g *greeterRunner) upload(s *discordgo.Session, i *discordgo.InteractionCre
 				}
 			}
 
-			urlChannel := make(chan string, len(fileList))
 			urlsCreated := []string{}
 
 			eg, ctx := errgroup.WithContext(ctx)
@@ -465,7 +501,7 @@ func (g *greeterRunner) upload(s *discordgo.Session, i *discordgo.InteractionCre
 						audioListKey: firestore.ArrayUnion(trackRecord{
 							TrackName: uuid.String(),
 							CreatedAt: time.Now(),
-							AddedBy:   i.Member.User.ID,
+							AddedBy:   interaction.Member.User.ID,
 						}),
 					}
 
@@ -476,39 +512,26 @@ func (g *greeterRunner) upload(s *discordgo.Session, i *discordgo.InteractionCre
 					// TODO: Shorten Urls
 					signedURL, err := g.firebaseAdapter.GenerateSignedURL(BucketName, fmt.Sprintf("voicelines/%s", uuid.String()))
 					if err != nil {
-						g.logger.Error("error generating signed url", zap.Error(err), zap.String("member_created_for", member.User.ID), zap.String("member_created_by", i.Member.User.ID))
+						g.logger.Error("error generating signed url", zap.Error(err), zap.String("member_created_for", member.User.ID), zap.String("member_created_by", interaction.Member.User.ID))
 						return fmt.Errorf("error generating signed url %w", err)
 					}
 
-					select {
-					case urlChannel <- signedURL:
-					case <-ctx.Done():
-						return context.Canceled
-					default:
-					}
+					g.Lock()
+					urlsCreated = append(urlsCreated, signedURL)
+					g.Unlock()
 
 					return nil
 				})
 			}
 
-			if err = eg.Wait(); err != nil {
-				g.logger.Error("error creating or uploading files", zap.Error(err), zap.String("member_created_for", member.User.ID), zap.String("member_created_by", i.Member.User.ID))
+			if err = eg.Wait(); err != nil || len(urlsCreated) == 0 {
+				g.logger.Error("error creating or uploading files", zap.Error(err), zap.String("member_created_for", member.User.ID), zap.String("member_created_by", interaction.Member.User.ID))
 				return err
 			}
 
-			close(urlChannel)
-
-			for url := range urlChannel {
-				urlsCreated = append(urlsCreated, url)
-			}
-
-			if len(urlsCreated) == 0 {
-				g.logger.Error("error no urls created", zap.Error(err), zap.String("member_created_for", member.User.ID), zap.String("member_created_by", i.Member.User.ID))
-				return fmt.Errorf("error no urls were created")
-			}
-			_, err = s.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
+			_, err = session.FollowupMessageCreate(interaction.Interaction, true, &discordgo.WebhookParams{
 				Embeds: []*discordgo.MessageEmbed{
-					embeds.SuccessfulAudioZipUploadEmbed(member, i.Member, audioType, urlsCreated),
+					embeds.SuccessfulAudioZipUploadEmbed(member, interaction.Member, audioType, urlsCreated),
 				},
 			})
 
@@ -518,7 +541,7 @@ func (g *greeterRunner) upload(s *discordgo.Session, i *discordgo.InteractionCre
 			}
 
 		default:
-			_, err := s.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
+			_, err := session.FollowupMessageCreate(interaction.Interaction, true, &discordgo.WebhookParams{
 				Embeds: []*discordgo.MessageEmbed{
 					embeds.ErrorMessageEmbed("File must be an mp3 or m4a file!"),
 				},
@@ -533,17 +556,178 @@ func (g *greeterRunner) upload(s *discordgo.Session, i *discordgo.InteractionCre
 	return nil
 }
 
-func (g *greeterRunner) greeterHandler(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	var err error
-	switch i.ApplicationCommandData().Name {
-	case "upload":
-		err = g.upload(s, i)
+func (g *greeterRunner) voicelines(session *discordgo.Session, interaction *discordgo.InteractionCreate) error {
+	options := interaction.ApplicationCommandData().Options
+	memberID, audioType := options[0].Value.(string), options[1].Value.(string)
+
+	member, err := session.State.Member(interaction.GuildID, memberID)
+	if err != nil {
+		g.logger.Error("error getting member to create audio track for", zap.Error(err), zap.String("user_id", memberID))
+		return err
+	}
+
+	collectionName := OutroCollection
+	audioListKey := OutroArrayKey
+
+	if audioType == "intro" {
+		audioListKey = IntroArrayKey
+		collectionName = WelcomeCollection
+	}
+
+	ctx := context.Background()
+
+	data, err := g.firebaseAdapter.GetDocumentFromCollection(ctx, collectionName, memberID)
+	if err != nil {
+		if status.Code(err) == codes.NotFound {
+			err := session.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Embeds: []*discordgo.MessageEmbed{embeds.NoDataForMemberEmbed(audioType, member.User.Username)},
+				},
+			})
+			return err
+		}
+
+		g.logger.Error("error getting document from firestore", zap.Error(err), zap.String("member_id", memberID), zap.String("collection", collectionName))
+		return err
+	}
+
+	if _, ok := data[audioListKey]; !ok {
+		return errors.New("audio key not found in document")
+	}
+
+	urls := []string{}
+
+	if data, ok := data[audioListKey].([]interface{}); ok {
+		eg, _ := errgroup.WithContext(ctx)
+
+		for _, trackRecord := range data {
+			if track, ok := trackRecord.(map[string]interface{}); ok {
+				eg.Go(func() error {
+					trackTitle := track["track_name"].(string)
+
+					signedUrl, err := g.firebaseAdapter.GenerateSignedURL(BucketName, fmt.Sprintf("voicelines/"+trackTitle))
+					if err != nil {
+						return err
+					}
+
+					g.Lock()
+					urls = append(urls, signedUrl)
+					g.Unlock()
+					return nil
+				})
+			}
+		}
+
+		if err := eg.Wait(); err != nil {
+			return fmt.Errorf("error retrieving generated signed urls %w", err)
+		}
+	} else {
+		return errors.New("error could not cast record")
+	}
+
+	if data, ok := data[audioListKey].([]map[string]interface{}); ok {
+		for _, trackRecord := range data[:4] {
+			urls = append(urls, trackRecord["track_name"].(string))
+		}
 
 	}
 
+	successEmbeds := embeds.GetSuccessfulAudioRetrievalEmbeds(member, audioType, urls)
+	if len(successEmbeds) == 1 {
+		err := session.InteractionRespond(interaction.Interaction,
+			&discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Embeds: []*discordgo.MessageEmbed{successEmbeds[0]},
+				},
+			})
+		if err != nil {
+			return err
+		}
+
+	} else {
+		err := session.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Components: embeds.GetPaginationComponent(),
+				Embeds:     []*discordgo.MessageEmbed{successEmbeds[0]},
+			},
+		})
+
+		if err != nil {
+			return err
+		}
+
+		message, err := session.InteractionResponse(interaction.Interaction)
+		if err != nil {
+			return err
+		}
+
+		g.messageStore[message.ID] = &paginationState{
+			Pages:       successEmbeds,
+			CurrentPage: 0,
+		}
+	}
+
+	return nil
+}
+
+func (g *greeterRunner) messageComponentHandler(session *discordgo.Session, interaction *discordgo.InteractionCreate) {
+	if interaction.Type != discordgo.InteractionMessageComponent {
+		return
+	}
+
+	if state, exists := g.messageStore[interaction.Message.ID]; exists {
+		switch interaction.MessageComponentData().CustomID {
+		case "first":
+			state.CurrentPage = 0
+		case "last":
+			state.CurrentPage = len(state.Pages) - 1
+		case "prev":
+			state.CurrentPage--
+			if state.CurrentPage < 0 {
+				state.CurrentPage = len(state.Pages) - 1
+			}
+		case "next":
+			state.CurrentPage++
+			if state.CurrentPage >= len(state.Pages) {
+				state.CurrentPage = 0
+			}
+		}
+
+		_, err := session.ChannelMessageEditEmbed(interaction.ChannelID, interaction.Message.ID, state.Pages[state.CurrentPage])
+		if err != nil {
+			g.logger.Error("error editing message pagination", zap.Error(err))
+		}
+
+		if err := session.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseUpdateMessage,
+		}); err != nil {
+			g.logger.Error("error responding with update message response", zap.Error(err))
+		}
+
+	}
+
+}
+
+func (g *greeterRunner) greeterHandler(session *discordgo.Session, interaction *discordgo.InteractionCreate) {
+	if interaction.Type != discordgo.InteractionApplicationCommand {
+		return
+	}
+
+	var err error
+
+	switch interaction.ApplicationCommandData().Name {
+	case "upload":
+		err = g.upload(session, interaction)
+	case "voicelines":
+		err = g.voicelines(session, interaction)
+	}
+
 	if err != nil {
-		g.logger.Error("An error occurred during when executing command", zap.Error(err), zap.String("command", i.ApplicationCommandData().Name))
-		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		g.logger.Error("An error occurred during when executing command", zap.Error(err), zap.String("command", interaction.ApplicationCommandData().Name))
+		_ = session.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
 				Embeds: []*discordgo.MessageEmbed{
