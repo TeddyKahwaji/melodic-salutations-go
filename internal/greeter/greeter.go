@@ -428,7 +428,6 @@ func (g *greeterRunner) upload(session *discordgo.Session, interaction *discordg
 					embeds.SuccessfulAudioFileUploadEmbed(member, interaction.Member, audioType, signedURL),
 				},
 			})
-
 			if err != nil {
 				g.logger.Error("error unable to send follow up embed: %v", zap.Error(err))
 				return err
@@ -534,7 +533,6 @@ func (g *greeterRunner) upload(session *discordgo.Session, interaction *discordg
 					embeds.SuccessfulAudioZipUploadEmbed(member, interaction.Member, audioType, urlsCreated),
 				},
 			})
-
 			if err != nil {
 				g.logger.Error("error unable to send follow up embed: %v", zap.Error(err))
 				return err
@@ -630,7 +628,6 @@ func (g *greeterRunner) voicelines(session *discordgo.Session, interaction *disc
 		for _, trackRecord := range data[:4] {
 			urls = append(urls, trackRecord["track_name"].(string))
 		}
-
 	}
 
 	successEmbeds := embeds.GetSuccessfulAudioRetrievalEmbeds(member, audioType, urls)
@@ -654,7 +651,6 @@ func (g *greeterRunner) voicelines(session *discordgo.Session, interaction *disc
 				Embeds:     []*discordgo.MessageEmbed{successEmbeds[0]},
 			},
 		})
-
 		if err != nil {
 			return err
 		}
@@ -708,7 +704,6 @@ func (g *greeterRunner) messageComponentHandler(session *discordgo.Session, inte
 		}
 
 	}
-
 }
 
 func (g *greeterRunner) greeterHandler(session *discordgo.Session, interaction *discordgo.InteractionCreate) {

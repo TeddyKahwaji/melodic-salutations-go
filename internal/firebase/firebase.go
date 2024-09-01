@@ -94,7 +94,6 @@ func (f *firebaseAdapter) GenerateSignedURL(bucketName string, objectName string
 		Method:  "GET",
 		Expires: time.Now().Add(15 * time.Minute),
 	})
-
 	if err != nil {
 		return "", fmt.Errorf("error signing url: %w", err)
 	}
