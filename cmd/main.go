@@ -48,6 +48,12 @@ func main() {
 
 	bot.Identify.Intents = discordgo.IntentsAll
 	bot.StateEnabled = true
+	bot.Identify.Presence = discordgo.GatewayStatusUpdate{
+		Game: discordgo.Activity{
+			Name: "/help",
+			Type: discordgo.ActivityTypeGame,
+		},
+	}
 	bot.AddHandler(func(session *discordgo.Session, _ *discordgo.Ready) {
 		ctx := context.Background()
 

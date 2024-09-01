@@ -143,3 +143,24 @@ func GetSuccessfulAudioRetrievalEmbeds(member *discordgo.Member, audioType strin
 
 	return embedList
 }
+
+func HelpMenuEmbed() *discordgo.MessageEmbed {
+	commandsToDescription := map[string]string{
+		"📽️ Upload":    "Upload an outro/intro voiceline (.zip, .mp3, .m4a) for a given user",
+		"🎤 Voicelines": "View the intro/outro voicelines for a given user",
+	}
+
+	embed := &discordgo.MessageEmbed{
+		Title:       "**🤖 Melodic Salutation's Help Page 👋**",
+		Description: "I only supports `/` commands, to view available commands use `/` followed by the desired command",
+		Color:       0x67e9ff,
+	}
+
+	for commandName, commandDescription := range commandsToDescription {
+		embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
+			Name:  fmt.Sprintf("**%s**", commandName),
+			Value: fmt.Sprintf("``%s``", commandDescription),
+		})
+	}
+	return embed
+}

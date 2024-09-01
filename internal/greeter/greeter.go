@@ -171,6 +171,10 @@ func (g *greeterRunner) GetCommands() []*discordgo.ApplicationCommand {
 				},
 			},
 		},
+		{
+			Name:        "help",
+			Description: "Displays the command menu",
+		},
 	}
 }
 
@@ -706,6 +710,17 @@ func (g *greeterRunner) messageComponentHandler(session *discordgo.Session, inte
 	}
 }
 
+func (g *greeterRunner) help(session *discordgo.Session, interaction *discordgo.InteractionCreate) error {
+	err := session.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Embeds: []*discordgo.MessageEmbed{embeds.HelpMenuEmbed()},
+		},
+	})
+
+	return err
+}
+
 func (g *greeterRunner) greeterHandler(session *discordgo.Session, interaction *discordgo.InteractionCreate) {
 	if interaction.Type != discordgo.InteractionApplicationCommand {
 		return
@@ -718,6 +733,8 @@ func (g *greeterRunner) greeterHandler(session *discordgo.Session, interaction *
 		err = g.upload(session, interaction)
 	case "voicelines":
 		err = g.voicelines(session, interaction)
+	case "help":
+		err = g.help(session, interaction)
 	}
 
 	if err != nil {
