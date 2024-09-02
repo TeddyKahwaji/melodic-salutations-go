@@ -48,6 +48,7 @@ func main() {
 
 	bot, err := discordgo.New("Bot " + discordToken)
 	bot.Client = &httpClient
+
 	if err != nil {
 		logger.Fatal("bot could not be booted", zap.Error(err))
 	}

@@ -579,11 +579,16 @@ func (g *greeterRunner) upload(session *discordgo.Session, interaction *discordg
 			}
 
 		default:
-			_, err := session.FollowupMessageCreate(interaction.Interaction, true, &discordgo.WebhookParams{
+			message, err := session.FollowupMessageCreate(interaction.Interaction, true, &discordgo.WebhookParams{
 				Embeds: []*discordgo.MessageEmbed{
 					embeds.ErrorMessageEmbed("File must be an mp3 or m4a file!"),
 				},
 			})
+
+			if err := util.DeleteMessageAfterTime(session, interaction.ChannelID, message.ID, time.Second*10); err != nil {
+				g.logger.Warn("failed to delete message with delay", zap.Error(err), zap.String("message_id", message.ID))
+			}
+
 			if err != nil {
 				g.logger.Error("unable to send follow up embed: %v", zap.Error(err))
 				return err
@@ -623,6 +628,19 @@ func (g *greeterRunner) voicelines(session *discordgo.Session, interaction *disc
 					Embeds: []*discordgo.MessageEmbed{embeds.NoDataForMemberEmbed(audioType, member.User.Username)},
 				},
 			})
+			if err != nil {
+				return err
+			}
+
+			message, err := session.InteractionResponse(interaction.Interaction)
+			if err != nil {
+				return err
+			}
+
+			if err := util.DeleteMessageAfterTime(session, interaction.ChannelID, message.ID, time.Second*10); err != nil {
+				g.logger.Warn("failed to delete message with delay", zap.Error(err), zap.String("message_id", message.ID))
+			}
+
 			return err
 		}
 
@@ -683,6 +701,14 @@ func (g *greeterRunner) voicelines(session *discordgo.Session, interaction *disc
 			return err
 		}
 
+		message, err := session.InteractionResponse(interaction.Interaction)
+		if err != nil {
+			return err
+		}
+
+		if err := util.DeleteMessageAfterTime(session, interaction.ChannelID, message.ID, time.Second*10); err != nil {
+			g.logger.Warn("failed to delete message with delay", zap.Error(err), zap.String("message_id", message.ID))
+		}
 	} else {
 		err := session.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
@@ -698,6 +724,10 @@ func (g *greeterRunner) voicelines(session *discordgo.Session, interaction *disc
 		message, err := session.InteractionResponse(interaction.Interaction)
 		if err != nil {
 			return err
+		}
+
+		if err := util.DeleteMessageAfterTime(session, interaction.ChannelID, message.ID, time.Second*10); err != nil {
+			g.logger.Warn("failed to delete message with delay", zap.Error(err), zap.String("message_id", message.ID))
 		}
 
 		g.messageStore[message.ID] = &paginationState{
@@ -742,7 +772,6 @@ func (g *greeterRunner) messageComponentHandler(session *discordgo.Session, inte
 		}); err != nil {
 			g.logger.Error("error responding with update message response", zap.Error(err))
 		}
-
 	}
 }
 
