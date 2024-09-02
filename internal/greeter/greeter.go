@@ -706,7 +706,7 @@ func (g *greeterRunner) voicelines(session *discordgo.Session, interaction *disc
 			return err
 		}
 
-		if err := util.DeleteMessageAfterTime(session, interaction.ChannelID, message.ID, time.Second*10); err != nil {
+		if err := util.DeleteMessageAfterTime(session, interaction.ChannelID, message.ID, time.Minute*2); err != nil {
 			g.logger.Warn("failed to delete message with delay", zap.Error(err), zap.String("message_id", message.ID))
 		}
 	} else {
@@ -726,7 +726,7 @@ func (g *greeterRunner) voicelines(session *discordgo.Session, interaction *disc
 			return err
 		}
 
-		if err := util.DeleteMessageAfterTime(session, interaction.ChannelID, message.ID, time.Second*10); err != nil {
+		if err := util.DeleteMessageAfterTime(session, interaction.ChannelID, message.ID, time.Minute*2); err != nil {
 			g.logger.Warn("failed to delete message with delay", zap.Error(err), zap.String("message_id", message.ID))
 		}
 
