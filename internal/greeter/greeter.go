@@ -448,10 +448,6 @@ func (g *greeterRunner) upload(session *discordgo.Session, interaction *discordg
 					g.logger.Error("error closing body", zap.Error(err))
 				}
 
-				if err := file.Close(); err != nil {
-					g.logger.Error("error closing file", zap.Error(err))
-				}
-
 				if err := util.DeleteFile(file.Name()); err != nil {
 					g.logger.Error("error trying to delete file", zap.Error(err), zap.String("file_name", file.Name()))
 				}
@@ -475,6 +471,23 @@ func (g *greeterRunner) upload(session *discordgo.Session, interaction *discordg
 					"added_by":   interaction.Member.User.ID,
 				}),
 				"name": memberID,
+			}
+
+			if _, err := g.firebaseAdapter.GetDocumentFromCollection(ctx, collection, memberID); err != nil {
+				if status.Code(err) == codes.NotFound {
+					var err error
+					if collection == WelcomeCollection {
+						err = g.firebaseAdapter.CreateDocument(ctx, collection, memberID, firebaseIntroRecord{Name: memberID, IntroArray: []trackRecord{}})
+					} else {
+						err = g.firebaseAdapter.CreateDocument(ctx, collection, memberID, firebaseOutroRecord{Name: memberID, OutroArray: []trackRecord{}})
+					}
+
+					if err != nil {
+						return fmt.Errorf("error creating firestore document: %w", err)
+					}
+				} else {
+					return err
+				}
 			}
 
 			if err := g.firebaseAdapter.UpdateDocument(ctx, collection, memberID, data); err != nil {
