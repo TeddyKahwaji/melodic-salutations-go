@@ -197,7 +197,7 @@ func (g *greeterRunner) globalPlay() {
 
 func (g *greeterRunner) voiceUpdate(session *discordgo.Session, vc *discordgo.VoiceStateUpdate) {
 	hasJoined := vc.BeforeUpdate == nil && !vc.VoiceState.Member.User.Bot && vc.ChannelID != ""
-	hasLeft := vc.BeforeUpdate != nil && !vc.Member.User.Bot && vc.ChannelID == ""
+	hasLeft := vc.BeforeUpdate != nil && !vc.Member.User.Bot
 
 	if hasLeft {
 		g.Lock() // Lock before accessing shared data
