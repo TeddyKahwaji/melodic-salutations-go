@@ -20,6 +20,7 @@ type Firebase interface {
 	UploadFileToStorage(ctx context.Context, bucketName string, objectName string, file *os.File, fileName string) error
 	UpdateDocument(ctx context.Context, collection string, document string, data map[string]interface{}) error
 	CreateDocument(ctx context.Context, collection string, document string, data interface{}) error
+	DeleteDocument(ctx context.Context, collection string, document string) error
 }
 
 type firebaseAdapter struct {
@@ -66,6 +67,16 @@ func (f *firebaseAdapter) GetDocumentFromCollection(ctx context.Context, collect
 
 func (f *firebaseAdapter) CreateDocument(ctx context.Context, collection string, document string, data interface{}) error {
 	_, err := f.firestoreClient.Collection(collection).Doc(document).Create(ctx, data)
+
+	return err
+}
+
+func (f *firebaseAdapter) DeleteDocument(ctx context.Context, collection string, document string) error {
+	_, err := f.firestoreClient.Collection(collection).Doc(document).Delete(ctx)
+
+	if err != nil {
+		return fmt.Errorf("error deleting document from collection: %w", err)
+	}
 
 	return err
 }

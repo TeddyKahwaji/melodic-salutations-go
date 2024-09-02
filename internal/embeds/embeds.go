@@ -118,7 +118,7 @@ func NoDataForMemberEmbed(audioType string, memberName string) *discordgo.Messag
 		Fields: []*discordgo.MessageEmbedField{
 			{
 				Name:  "",
-				Value: fmt.Sprintf("Upload a voiceline for **%s** with </upload:1098009652706426911>", memberName),
+				Value: fmt.Sprintf("Upload a voiceline for **%s** with </upload:1098059441884115056>", memberName),
 			},
 		},
 		Thumbnail: &discordgo.MessageEmbedThumbnail{
@@ -158,6 +158,8 @@ func HelpMenuEmbed() *discordgo.MessageEmbed {
 	commandsToDescription := map[string]string{
 		"📽️ Upload":    "Upload an outro/intro voiceline (.zip, .mp3, .m4a) for a given user",
 		"🎤 Voicelines": "View the intro/outro voicelines for a given user",
+		"🟩 Whitelist":  "Remove yourself from the blacklist",
+		"🚫 Blacklist":  "Adds you to the blacklist, preventing you from receiving voicelines",
 	}
 
 	embed := &discordgo.MessageEmbed{
@@ -168,9 +170,70 @@ func HelpMenuEmbed() *discordgo.MessageEmbed {
 
 	for commandName, commandDescription := range commandsToDescription {
 		embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
-			Name:  fmt.Sprintf("**%s**", commandName),
-			Value: fmt.Sprintf("``%s``", commandDescription),
+			Name:   fmt.Sprintf("**%s**", commandName),
+			Value:  fmt.Sprintf("``%s``", commandDescription),
+			Inline: true,
 		})
 	}
 	return embed
+}
+
+func AlreadyOnBlacklistEmbed(member *discordgo.Member) *discordgo.MessageEmbed {
+	return &discordgo.MessageEmbed{
+		Title: fmt.Sprintf("%s is already on the blacklist!", member.User.Username),
+		Color: 0x206694,
+		Fields: []*discordgo.MessageEmbedField{
+			{
+				Value: "To remove yourself, use `/whitelist`",
+			},
+		},
+		Thumbnail: &discordgo.MessageEmbedThumbnail{
+			URL: member.AvatarURL(""),
+		},
+	}
+}
+
+func AddedToBlacklistEmbed(member *discordgo.Member) *discordgo.MessageEmbed {
+	return &discordgo.MessageEmbed{
+		Title: fmt.Sprintf("%s has been added to the blacklist!", member.User.Username),
+		Color: 0x67e9ff,
+		Fields: []*discordgo.MessageEmbedField{
+			{
+				Value: "You will no longer be greeted with a voiceline when joining a voice channel, if you'd like to undo this use `/whitelist`",
+			},
+		},
+		Thumbnail: &discordgo.MessageEmbedThumbnail{
+			URL: member.AvatarURL(""),
+		},
+	}
+}
+
+func NotOnBlacklistEmbed(member *discordgo.Member) *discordgo.MessageEmbed {
+	return &discordgo.MessageEmbed{
+		Title: fmt.Sprintf("%s is not on the blacklist", member.User.Username),
+		Color: 0x206694,
+		Fields: []*discordgo.MessageEmbedField{
+			{
+				Value: "To add yourself to the blacklist, use `/blacklist`",
+			},
+		},
+		Thumbnail: &discordgo.MessageEmbedThumbnail{
+			URL: member.AvatarURL(""),
+		},
+	}
+}
+
+func RemovedFromBlacklistEmbed(member *discordgo.Member) *discordgo.MessageEmbed {
+	return &discordgo.MessageEmbed{
+		Title: fmt.Sprintf("%s has been removed from the blacklist", member.User.Username),
+		Color: 0x67e9ff,
+		Fields: []*discordgo.MessageEmbedField{
+			{
+				Value: "You will now receive voicelines, if you'd like to undo this use `/blacklist`",
+			},
+		},
+		Thumbnail: &discordgo.MessageEmbedThumbnail{
+			URL: member.AvatarURL(""),
+		},
+	}
 }

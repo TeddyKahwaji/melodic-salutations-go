@@ -28,11 +28,12 @@ import (
 )
 
 const (
-	WelcomeCollection string = "welcomeIntros"
-	OutroCollection   string = "byeOutros"
-	IntroArrayKey     string = "intro_array"
-	OutroArrayKey     string = "outro_array"
-	BucketName        string = "twitterbot-e7ab0.appspot.com"
+	WelcomeCollection   string = "welcomeIntros"
+	OutroCollection     string = "byeOutros"
+	BlacklistCollection string = "blacklist"
+	IntroArrayKey       string = "intro_array"
+	OutroArrayKey       string = "outro_array"
+	BucketName          string = "twitterbot-e7ab0.appspot.com"
 )
 
 type FileType string
@@ -78,6 +79,10 @@ type trackRecord struct {
 	AddedBy   string    `firestore:"added_by"    mapstructure:"added_by"`
 	CreatedAt time.Time `firestore:"created_at"  mapstructure:"created_at"`
 	TrackName string    `firestore:"track_name"  mapstructure:"track_name"`
+}
+
+type blacklistRecord struct {
+	AddedOn time.Time `firestore:"added_on"`
 }
 
 type firebaseIntroRecord struct {
@@ -175,6 +180,14 @@ func (g *greeterRunner) GetCommands() []*discordgo.ApplicationCommand {
 			Name:        "help",
 			Description: "Displays the command menu",
 		},
+		{
+			Name:        "blacklist",
+			Description: "Prevents bot from playing your intros and outros",
+		},
+		{
+			Name:        "whitelist",
+			Description: "This command removes you from the blacklist",
+		},
 	}
 }
 
@@ -198,6 +211,13 @@ func (g *greeterRunner) globalPlay() {
 func (g *greeterRunner) voiceUpdate(session *discordgo.Session, vc *discordgo.VoiceStateUpdate) {
 	hasJoined := vc.BeforeUpdate == nil && !vc.VoiceState.Member.User.Bot && vc.ChannelID != ""
 	hasLeft := vc.BeforeUpdate != nil && !vc.Member.User.Bot
+
+	ctx := context.Background()
+	isInBlacklist, err := g.isInBlacklist(ctx, vc.VoiceState.Member.User.ID)
+
+	if err != nil {
+		g.logger.Warn("unable to check blacklist status for user", zap.Error(err), zap.String("user_id", vc.VoiceState.Member.User.ID))
+	}
 
 	if hasLeft {
 		g.Lock() // Lock before accessing shared data
@@ -245,8 +265,11 @@ func (g *greeterRunner) voiceUpdate(session *discordgo.Session, vc *discordgo.Vo
 		COLLECTION = OutroCollection
 	}
 
-	ctx := context.Background()
 	if hasJoined || hasLeft {
+		if isInBlacklist {
+			return
+		}
+
 		g.Lock() // Lock before accessing shared data
 
 		if _, ok := g.guildPlayerMappings[vc.GuildID]; !ok {
@@ -819,22 +842,116 @@ func (g *greeterRunner) help(session *discordgo.Session, interaction *discordgo.
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
 			Embeds: []*discordgo.MessageEmbed{embeds.HelpMenuEmbed()},
+			Flags:  discordgo.MessageFlagsEphemeral,
 		},
 	})
+
 	if err != nil {
 		return err
 	}
 
-	message, err := session.InteractionResponse(interaction.Interaction)
+	return nil
+}
+
+func (g *greeterRunner) isInBlacklist(ctx context.Context, memberId string) (bool, error) {
+	_, err := g.firebaseAdapter.GetDocumentFromCollection(ctx, BlacklistCollection, memberId)
 	if err != nil {
-		return err
+		if status.Code(err) == codes.NotFound {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+func (g *greeterRunner) blacklist(session *discordgo.Session, interaction *discordgo.InteractionCreate) error {
+	ctx := context.Background()
+	isInBlacklist, err := g.isInBlacklist(ctx, interaction.Member.User.ID)
+	if err != nil {
+		return fmt.Errorf("error attempting to check if user is already in blacklist %w", err)
 	}
 
-	if err := util.DeleteMessageAfterTime(session, interaction.ChannelID, message.ID, time.Minute*1); err != nil {
-		g.logger.Warn("failed to delete message with delay", zap.Error(err), zap.String("message_id", message.ID))
+	if isInBlacklist {
+		err = session.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Embeds: []*discordgo.MessageEmbed{embeds.AlreadyOnBlacklistEmbed(interaction.Member)},
+				Flags:  discordgo.MessageFlagsEphemeral,
+			},
+		})
+
+		if err != nil {
+			return fmt.Errorf("error attempting to send already on blacklist embed message: %w", err)
+		}
+		return nil
 	}
 
-	return err
+	err = g.firebaseAdapter.CreateDocument(ctx, BlacklistCollection, interaction.Member.User.ID, &blacklistRecord{
+		AddedOn: time.Now(),
+	})
+
+	if err != nil {
+		return fmt.Errorf("error attempting to create firebase document containing blacklist information: %w", err)
+	}
+
+	err = session.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Embeds: []*discordgo.MessageEmbed{embeds.AddedToBlacklistEmbed(interaction.Member)},
+			Flags:  discordgo.MessageFlagsEphemeral,
+		},
+	})
+
+	if err != nil {
+		return fmt.Errorf("error attempting to send response: %w", err)
+	}
+
+	return nil
+}
+
+func (g *greeterRunner) whitelist(session *discordgo.Session, interaction *discordgo.InteractionCreate) error {
+	ctx := context.Background()
+	isInBlacklist, err := g.isInBlacklist(ctx, interaction.Member.User.ID)
+
+	if err != nil {
+		return fmt.Errorf("error attempting to check if user is in blacklist: %w", err)
+	}
+
+	if !isInBlacklist {
+		err = session.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Embeds: []*discordgo.MessageEmbed{embeds.NotOnBlacklistEmbed(interaction.Member)},
+				Flags:  discordgo.MessageFlagsEphemeral,
+			},
+		})
+
+		if err != nil {
+			return fmt.Errorf("error attempting to send response: %w", err)
+		}
+
+		return nil
+	}
+
+	err = g.firebaseAdapter.DeleteDocument(ctx, BlacklistCollection, interaction.Member.User.ID)
+
+	if err != nil {
+		return fmt.Errorf("error deleting document: %w", err)
+	}
+
+	err = session.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Embeds: []*discordgo.MessageEmbed{embeds.RemovedFromBlacklistEmbed(interaction.Member)},
+			Flags:  discordgo.MessageFlagsEphemeral,
+		},
+	})
+
+	if err != nil {
+		return fmt.Errorf("error attempting to send response: %w", err)
+	}
+
+	return nil
 }
 
 func (g *greeterRunner) greeterHandler(session *discordgo.Session, interaction *discordgo.InteractionCreate) {
@@ -851,6 +968,10 @@ func (g *greeterRunner) greeterHandler(session *discordgo.Session, interaction *
 		err = g.voicelines(session, interaction)
 	case "help":
 		err = g.help(session, interaction)
+	case "blacklist":
+		err = g.blacklist(session, interaction)
+	case "whitelist":
+		err = g.whitelist(session, interaction)
 	}
 
 	if err != nil {
@@ -863,5 +984,13 @@ func (g *greeterRunner) greeterHandler(session *discordgo.Session, interaction *
 				},
 			},
 		})
+
+		message, err := session.InteractionResponse(interaction.Interaction)
+		if err != nil {
+			g.logger.Error("An error attempting to retrieve interaction response", zap.Error(err))
+		} else if err := util.DeleteMessageAfterTime(session, interaction.ChannelID, message.ID, time.Second*30); err != nil {
+			g.logger.Warn("failed to delete message with delay", zap.Error(err), zap.String("message_id", message.ID))
+		}
+
 	}
 }
