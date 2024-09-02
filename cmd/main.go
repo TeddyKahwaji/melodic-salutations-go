@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
+	"time"
 
 	firebaseAdapter "salutations/internal/firebase"
 	"salutations/internal/greeter"
@@ -40,8 +42,12 @@ func main() {
 	}()
 
 	discordToken := os.Getenv("MELODY_DISCORD_TOKEN")
+	httpClient := http.Client{
+		Timeout: time.Second * 3,
+	}
 
 	bot, err := discordgo.New("Bot " + discordToken)
+	bot.Client = &httpClient
 	if err != nil {
 		logger.Fatal("bot could not be booted", zap.Error(err))
 	}

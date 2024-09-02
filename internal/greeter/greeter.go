@@ -200,25 +200,40 @@ func (g *greeterRunner) voiceUpdate(session *discordgo.Session, vc *discordgo.Vo
 	hasLeft := vc.BeforeUpdate != nil && !vc.Member.User.Bot && vc.ChannelID == ""
 
 	if hasLeft {
+		g.Lock() // Lock before accessing shared data
+
+		perms, err := session.UserChannelPermissions(session.State.Ready.User.ID, vc.BeforeUpdate.ChannelID)
+		if err != nil {
+			g.logger.Error("unable to get permissions for channel", zap.Error(err), zap.String("channel_id", vc.BeforeUpdate.ChannelID))
+			g.Unlock() // Unlock before returning
+			return
+		}
+
+		if perms&discordgo.PermissionVoiceConnect == 0 || perms&discordgo.PermissionVoiceSpeak == 0 {
+			g.logger.Info("Bot will not be joining voice channel because they do not have sufficient privileges", zap.String("channel_id", vc.BeforeUpdate.ChannelID))
+			g.Unlock() // Unlock before returning
+			return
+		}
+
 		channel, err := session.Channel(vc.BeforeUpdate.ChannelID)
 		if err != nil {
 			g.logger.Error("error getting channel", zap.Error(err), zap.String("channel_id", vc.BeforeUpdate.ChannelID))
+			g.Unlock() // Unlock before returning
 			return
 		}
 
 		if channel.MemberCount == 0 && vc.VoiceState != nil {
 			if vc, ok := session.VoiceConnections[vc.GuildID]; ok {
-				g.Lock()
 				if err := vc.Disconnect(); err != nil {
 					g.logger.Error("error disconnecting from channel", zap.Error(err), zap.String("channel_id", vc.ChannelID))
+					g.Unlock() // Unlock before returning
 					return
 				}
-
 				delete(g.guildPlayerMappings, vc.GuildID)
-				g.Unlock()
 			}
 		}
 
+		g.Unlock() // Unlock after modifications are done
 		return
 	}
 
@@ -231,13 +246,30 @@ func (g *greeterRunner) voiceUpdate(session *discordgo.Session, vc *discordgo.Vo
 
 	ctx := context.Background()
 	if hasJoined || hasLeft {
-		g.Lock()
+		g.Lock() // Lock before accessing shared data
+
 		if _, ok := g.guildPlayerMappings[vc.GuildID]; !ok {
+			perms, err := session.UserChannelPermissions(session.State.Ready.User.ID, vc.ChannelID)
+			if err != nil {
+				g.logger.Error("unable to get permissions for channel", zap.Error(err), zap.String("channel_id", vc.ChannelID))
+				g.Unlock() // Unlock before returning
+				return
+			}
+
+			if perms&int64(discordgo.PermissionVoiceConnect) == 0 || perms&int64(discordgo.PermissionVoiceSpeak) == 0 {
+				g.logger.Info("Bot will not be joining voice channel because they do not have sufficient privileges", zap.String("channel_id", vc.ChannelID))
+				g.Unlock() // Unlock before returning
+				return
+			}
+
 			channelVoiceConnection, err := session.ChannelVoiceJoin(vc.GuildID, vc.ChannelID, false, true)
 			if err != nil {
 				g.logger.Error("error unable to join voice channel", zap.String("channel_id", vc.ChannelID), zap.String("guild_id", vc.GuildID), zap.Error(err))
+				g.Unlock() // Unlock before returning
 				return
 			}
+
+			// Modify the shared data (g.guildPlayerMappings)
 			g.guildPlayerMappings[vc.GuildID] = &guildPlayer{
 				guildID:     vc.GuildID,
 				voiceClient: channelVoiceConnection,
@@ -249,23 +281,27 @@ func (g *greeterRunner) voiceUpdate(session *discordgo.Session, vc *discordgo.Vo
 		randomAudioTrack, err := g.retrieveRandomAudioName(ctx, COLLECTION, vc.UserID)
 		if err != nil {
 			g.logger.Error("failed to get random audio track from firestore", zap.Error(err))
+			g.Unlock() // Unlock before returning
 			return
 		}
 
 		audioBytes, err := g.firebaseAdapter.DownloadFileBytes(ctx, BucketName, fmt.Sprintf("voicelines/%s", randomAudioTrack))
 		if err != nil {
 			g.logger.Error("failed to get audio bytes from storage", zap.Error(err))
+			g.Unlock() // Unlock before returning
 			return
 		}
 
 		file, err := util.DownloadFileToTempDirectory(audioBytes)
 		if err != nil {
 			g.logger.Error("failed to download audio bytes to temporary directory", zap.Error(err))
+			g.Unlock() // Unlock before returning
 			return
 		}
 
+		// Update the queue for the guild
 		g.guildPlayerMappings[vc.GuildID].queue = append(g.guildPlayerMappings[vc.GuildID].queue, file.Name())
-		g.Unlock()
+		g.Unlock() // Unlock after modifications are done
 
 		if g.guildPlayerMappings[vc.GuildID].voiceState == NotPlaying {
 			g.songSignal <- g.guildPlayerMappings[vc.GuildID]
