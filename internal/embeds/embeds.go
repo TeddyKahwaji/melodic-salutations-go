@@ -129,8 +129,8 @@ func GetSuccessfulAudioRetrievalEmbeds(member *discordgo.Member, audioType strin
 
 	embedList := []*discordgo.MessageEmbed{}
 
-	for i := 0; i < len(urls); i += 3 {
-		endBound := min(len(embedFields), i+3)
+	for i := 0; i < len(urls); i += 4 {
+		endBound := min(len(embedFields), i+4)
 		embedList = append(embedList, &discordgo.MessageEmbed{
 			Title: fmt.Sprintf("%s's Voiceline %ss", member.User.Username, audioType),
 			Color: 0x67e9ff,
