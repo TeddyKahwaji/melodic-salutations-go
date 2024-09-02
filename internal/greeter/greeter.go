@@ -310,7 +310,7 @@ func (g *greeterRunner) voiceUpdate(session *discordgo.Session, vc *discordgo.Vo
 	}
 }
 
-// TODO: Reduce complexity here
+// TODO: Reduce complexity here.
 func (g *greeterRunner) retrieveRandomAudioName(ctx context.Context, collection string, userId string) (string, error) {
 	data, err := g.firebaseAdapter.GetDocumentFromCollection(ctx, collection, userId)
 	if err != nil {
@@ -570,14 +570,44 @@ func (g *greeterRunner) upload(session *discordgo.Session, interaction *discordg
 				return err
 			}
 
-			_, err = session.FollowupMessageCreate(interaction.Interaction, true, &discordgo.WebhookParams{
-				Embeds: []*discordgo.MessageEmbed{
-					embeds.SuccessfulAudioZipUploadEmbed(member, interaction.Member, audioType, urlsCreated),
-				},
-			})
-			if err != nil {
-				g.logger.Error("error unable to send follow up embed: %v", zap.Error(err))
-				return err
+			successfulUploadEmbeds := embeds.SuccessfulAudioZipUploadEmbeds(member, interaction.Member, audioType, urlsCreated)
+
+			if len(successfulUploadEmbeds) == 1 {
+				_, err = session.FollowupMessageCreate(interaction.Interaction, true, &discordgo.WebhookParams{
+					Embeds: []*discordgo.MessageEmbed{
+						successfulUploadEmbeds[0],
+					},
+				})
+				if err != nil {
+					g.logger.Error("error unable to send follow up embed: %v", zap.Error(err))
+					return err
+				}
+
+				message, err := session.InteractionResponse(interaction.Interaction)
+				if err != nil {
+					return err
+				}
+
+				if err := util.DeleteMessageAfterTime(session, interaction.ChannelID, message.ID, time.Minute*2); err != nil {
+					g.logger.Warn("failed to delete message with delay", zap.Error(err), zap.String("message_id", message.ID))
+				}
+			} else {
+				message, err := session.FollowupMessageCreate(interaction.Interaction, true, &discordgo.WebhookParams{
+					Components: embeds.GetPaginationComponent(true, true, false, false),
+					Embeds:     []*discordgo.MessageEmbed{successfulUploadEmbeds[0]},
+				})
+				if err != nil {
+					return fmt.Errorf("error sending pagination for upload command %w", err)
+				}
+
+				if err := util.DeleteMessageAfterTime(session, interaction.ChannelID, message.ID, time.Minute*2); err != nil {
+					g.logger.Warn("failed to delete message with delay", zap.Error(err), zap.String("message_id", message.ID))
+				}
+
+				g.messageStore[message.ID] = &paginationState{
+					Pages:       successfulUploadEmbeds,
+					CurrentPage: 0,
+				}
 			}
 
 		default:

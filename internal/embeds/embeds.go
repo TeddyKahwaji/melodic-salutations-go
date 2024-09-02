@@ -37,29 +37,35 @@ func SuccessfulAudioFileUploadEmbed(memberCreatedFor *discordgo.Member, memberCr
 	}
 }
 
-func SuccessfulAudioZipUploadEmbed(memberCreatedFor *discordgo.Member, memberCreatedBy *discordgo.Member, audioType string, urls []string) *discordgo.MessageEmbed {
+func SuccessfulAudioZipUploadEmbeds(memberCreatedFor *discordgo.Member, memberCreatedBy *discordgo.Member, audioType string, urls []string) []*discordgo.MessageEmbed {
 	embedFields := []*discordgo.MessageEmbedField{}
 
 	for i, url := range urls {
 		embedFields = append(embedFields, &discordgo.MessageEmbedField{
 			Name:   "",
-			Value:  fmt.Sprintf("%s's new [Voiceline %d](%s) 🎤!", memberCreatedFor.User.Username, i+1, url),
+			Value:  fmt.Sprintf("`-` %s's new [Voiceline %d](%s) 🎤!", memberCreatedFor.User.Username, i+1, url),
 			Inline: false,
 		})
 	}
 
-	return &discordgo.MessageEmbed{
-		Title: fmt.Sprintf("🎤 %d Voiceline %ss Successfully Created 🎤", len(urls), audioType),
-		Color: 0x67e9ff,
-		Thumbnail: &discordgo.MessageEmbedThumbnail{
-			URL: memberCreatedFor.AvatarURL(""),
-		},
-		Footer: &discordgo.MessageEmbedFooter{
-			Text:    "Created by: " + memberCreatedBy.DisplayName(),
-			IconURL: memberCreatedBy.AvatarURL(""),
-		},
-		Fields: embedFields,
+	embedList := []*discordgo.MessageEmbed{}
+
+	for i := 0; i < len(urls); i += 4 {
+		endBound := min(len(embedFields), i+4)
+		embedList = append(embedList, &discordgo.MessageEmbed{
+			Title: fmt.Sprintf("🎤 %d Voiceline %ss Successfully Created 🎤", len(urls), audioType),
+			Color: 0x67e9ff,
+			Thumbnail: &discordgo.MessageEmbedThumbnail{
+				URL: memberCreatedFor.AvatarURL(""),
+			},
+			Footer: &discordgo.MessageEmbedFooter{
+				Text:    "Created by: " + memberCreatedBy.DisplayName(),
+				IconURL: memberCreatedBy.AvatarURL(""),
+			},
+			Fields: embedFields[i:endBound],
+		})
 	}
+	return embedList
 }
 
 func UnexpectedErrorEmbed() *discordgo.MessageEmbed {

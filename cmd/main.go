@@ -21,19 +21,20 @@ import (
 	"google.golang.org/api/option"
 )
 
+func getLogger(env string) *zap.Logger {
+	if strings.ToUpper(env) == "PROD" {
+		return zap.Must(zap.NewProduction())
+	} else {
+		return zap.Must(zap.NewDevelopment())
+	}
+}
+
 func main() {
 	const PROJECT_ID = "twitterbot-e7ab0"
 
-	var bot *discordgo.Session
-
-	var logger *zap.Logger
-
 	env := os.Getenv("ENV")
-	if strings.ToUpper(env) == "PROD" {
-		logger = zap.Must(zap.NewProduction())
-	} else {
-		logger = zap.Must(zap.NewDevelopment())
-	}
+
+	logger := getLogger(env)
 
 	defer func() {
 		if err := logger.Sync(); err != nil {
