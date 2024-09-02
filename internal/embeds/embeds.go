@@ -72,7 +72,7 @@ func UnexpectedErrorEmbed() *discordgo.MessageEmbed {
 	}
 }
 
-func GetPaginationComponent() []discordgo.MessageComponent {
+func GetPaginationComponent(disableStart bool, disablePrevious bool, disableNext bool, disableFinish bool) []discordgo.MessageComponent {
 	return []discordgo.MessageComponent{
 		discordgo.ActionsRow{
 			Components: []discordgo.MessageComponent{
@@ -80,21 +80,25 @@ func GetPaginationComponent() []discordgo.MessageComponent {
 					Label:    "|<",
 					Style:    discordgo.SuccessButton,
 					CustomID: "first",
+					Disabled: disableStart,
 				},
 				discordgo.Button{
 					Label:    "<",
 					Style:    discordgo.PrimaryButton,
 					CustomID: "prev",
+					Disabled: disablePrevious,
 				},
 				discordgo.Button{
 					Label:    ">",
 					Style:    discordgo.PrimaryButton,
 					CustomID: "next",
+					Disabled: disableNext,
 				},
 				discordgo.Button{
 					Label:    ">|",
 					Style:    discordgo.SuccessButton,
 					CustomID: "last",
+					Disabled: disableFinish,
 				},
 			},
 		},

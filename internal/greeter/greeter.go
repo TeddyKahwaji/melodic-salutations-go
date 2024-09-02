@@ -229,6 +229,7 @@ func (g *greeterRunner) voiceUpdate(session *discordgo.Session, vc *discordgo.Vo
 					g.Unlock() // Unlock before returning
 					return
 				}
+
 				delete(g.guildPlayerMappings, vc.GuildID)
 			}
 		}
@@ -468,6 +469,7 @@ func (g *greeterRunner) upload(session *discordgo.Session, interaction *discordg
 					embeds.SuccessfulAudioFileUploadEmbed(member, interaction.Member, audioType, signedURL),
 				},
 			})
+
 			if err != nil {
 				g.logger.Error("error unable to send follow up embed: %v", zap.Error(err))
 				return err
@@ -713,7 +715,7 @@ func (g *greeterRunner) voicelines(session *discordgo.Session, interaction *disc
 		err := session.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
-				Components: embeds.GetPaginationComponent(),
+				Components: embeds.GetPaginationComponent(true, true, false, false),
 				Embeds:     []*discordgo.MessageEmbed{successEmbeds[0]},
 			},
 		})
@@ -762,15 +764,22 @@ func (g *greeterRunner) messageComponentHandler(session *discordgo.Session, inte
 			}
 		}
 
-		_, err := session.ChannelMessageEditEmbed(interaction.ChannelID, interaction.Message.ID, state.Pages[state.CurrentPage])
+		components := embeds.GetPaginationComponent(state.CurrentPage == 0, state.CurrentPage == 0, state.CurrentPage == len(state.Pages)-1, state.CurrentPage == len(state.Pages)-1)
+		_, err := session.ChannelMessageEditComplex(&discordgo.MessageEdit{
+			ID:         interaction.Message.ID,
+			Channel:    interaction.ChannelID,
+			Embeds:     &[]*discordgo.MessageEmbed{state.Pages[state.CurrentPage]},
+			Components: &components,
+		})
+
 		if err != nil {
-			g.logger.Error("error editing message pagination", zap.Error(err))
+			g.logger.Warn("error editing complex message", zap.Error(err))
 		}
 
 		if err := session.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseUpdateMessage,
 		}); err != nil {
-			g.logger.Error("error responding with update message response", zap.Error(err))
+			g.logger.Warn("error responding with update message response", zap.Error(err))
 		}
 	}
 }
@@ -782,6 +791,18 @@ func (g *greeterRunner) help(session *discordgo.Session, interaction *discordgo.
 			Embeds: []*discordgo.MessageEmbed{embeds.HelpMenuEmbed()},
 		},
 	})
+	if err != nil {
+		return err
+	}
+
+	message, err := session.InteractionResponse(interaction.Interaction)
+	if err != nil {
+		return err
+	}
+
+	if err := util.DeleteMessageAfterTime(session, interaction.ChannelID, message.ID, time.Minute*1); err != nil {
+		g.logger.Warn("failed to delete message with delay", zap.Error(err), zap.String("message_id", message.ID))
+	}
 
 	return err
 }
