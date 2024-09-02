@@ -44,7 +44,7 @@ func main() {
 
 	discordToken := os.Getenv("MELODY_DISCORD_TOKEN")
 	httpClient := http.Client{
-		Timeout: time.Second * 3,
+		Timeout: time.Second * 5,
 	}
 
 	bot, err := discordgo.New("Bot " + discordToken)

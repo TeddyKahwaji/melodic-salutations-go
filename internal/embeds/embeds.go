@@ -139,8 +139,8 @@ func GetSuccessfulAudioRetrievalEmbeds(member *discordgo.Member, audioType strin
 
 	embedList := []*discordgo.MessageEmbed{}
 
-	for i := 0; i < len(urls); i += 4 {
-		endBound := min(len(embedFields), i+4)
+	for i := 0; i < len(urls); i += 3 {
+		endBound := min(len(embedFields), i+3)
 		embedList = append(embedList, &discordgo.MessageEmbed{
 			Title: fmt.Sprintf("%s's Voiceline %ss", member.User.Username, audioType),
 			Color: 0x67e9ff,
@@ -236,4 +236,35 @@ func RemovedFromBlacklistEmbed(member *discordgo.Member) *discordgo.MessageEmbed
 			URL: member.AvatarURL(""),
 		},
 	}
+}
+
+func AddSelectMenu(components []discordgo.MessageComponent, userID string, optionValues map[string]string) ([]discordgo.MessageComponent, error) {
+	options := []discordgo.SelectMenuOption{}
+
+	for key, value := range optionValues {
+		options = append(options, discordgo.SelectMenuOption{Label: key, Value: value})
+	}
+
+	minValues := 1
+
+	selectMenu := &discordgo.SelectMenu{
+		CustomID:  userID,
+		MenuType:  discordgo.StringSelectMenu,
+		Options:   options,
+		MaxValues: len(options),
+		DefaultValues: []discordgo.SelectMenuDefaultValue{{
+			Type: discordgo.SelectMenuDefaultValueChannel,
+			ID:   "defaultValue",
+		}},
+		MinValues: &minValues,
+	}
+
+	messageComponent := components
+	messageComponent = append(messageComponent, discordgo.ActionsRow{
+		Components: []discordgo.MessageComponent{
+			selectMenu,
+		},
+	})
+
+	return messageComponent, nil
 }
