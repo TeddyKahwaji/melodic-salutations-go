@@ -855,6 +855,7 @@ func (g *greeterRunner) messageComponentHandler(session *discordgo.Session, inte
 		return
 	}
 
+	var forwardButtonPressed bool
 	if state, exists := g.messageStore[interaction.Message.ID]; exists {
 		switch interaction.MessageComponentData().CustomID {
 		case "first":
@@ -871,6 +872,7 @@ func (g *greeterRunner) messageComponentHandler(session *discordgo.Session, inte
 			if state.CurrentPage >= len(state.Pages) {
 				state.CurrentPage = 0
 			}
+			forwardButtonPressed = true
 		}
 
 		message, err := session.ChannelMessage(interaction.ChannelID, interaction.Message.ID)
@@ -910,13 +912,27 @@ func (g *greeterRunner) messageComponentHandler(session *discordgo.Session, inte
 					}
 
 					options := []discordgo.SelectMenuOption{}
-					newMenuBound := min(state.SelectMenuBound+3, len(state.SelectMenuData))
-					for i, value := range state.SelectMenuData[state.SelectMenuBound:newMenuBound] {
-						options = append(options, discordgo.SelectMenuOption{Label: fmt.Sprintf("%s's voiceline %d", member.User.Username, i+1), Value: value})
+					var minBound, maxBound int
+					if state.CurrentPage == 0 {
+						minBound = 0
+						maxBound = min(3, len(state.SelectMenuData))
+					} else if state.CurrentPage == len(state.Pages)-1 {
+						minBound = state.SelectMenuBound
+						maxBound = len(state.SelectMenuData)
+					} else if forwardButtonPressed {
+						minBound = state.SelectMenuBound
+						maxBound = min(state.SelectMenuBound+3, len(state.SelectMenuData))
+					} else {
+						minBound = max(state.SelectMenuBound-3, 0)
+						maxBound = state.SelectMenuBound
+					}
+
+					for i, value := range state.SelectMenuData[minBound:maxBound] {
+						options = append(options, discordgo.SelectMenuOption{Label: fmt.Sprintf("%s's Voiceline %d", member.User.Username, i+minBound+1), Value: value})
 					}
 
 					selectMenu.Options = options
-					state.SelectMenuBound = newMenuBound
+					state.SelectMenuBound = maxBound
 					selectMenuActionRow.Components[0] = selectMenu
 				}
 				message.Components[1] = selectMenuActionRow
