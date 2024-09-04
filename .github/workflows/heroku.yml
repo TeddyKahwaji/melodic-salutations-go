@@ -53,10 +53,10 @@ jobs:
           # For more information look at https://devcenter.heroku.com/articles/process-model
           process_type: web
         env:
-          GCP_CLIENT_ID: ${{secrets.GCP_CLIENT_ID}}
-          GCP_CLIENT_EMAIL: ${{secrets.GCP_CLIENT_EMAIL}}
-          GCP_PRIVATE_KEY_ID: ${{secrets.GCP_PRIVATE_KEY_ID}}
-          GCP_PRIVATE_KEY: ${{secrets.GCP_PRIVATE_KEY}}
-          GCP_PROJECT_ID: ${{secrets.GCP_PROJECT_ID}}
-          MELODY_DISCORD_TOKEN: ${{secrets.MELODY_DISCORD_TOKEN}}
-          ENV: ${{secrets.ENV}}
+          HD_GCP_CLIENT_ID: ${{secrets.GCP_CLIENT_ID}}
+          HD_GCP_CLIENT_EMAIL: ${{secrets.GCP_CLIENT_EMAIL}}
+          HD_GCP_PRIVATE_KEY_ID: ${{secrets.GCP_PRIVATE_KEY_ID}}
+          HD_GCP_PRIVATE_KEY: ${{secrets.GCP_PRIVATE_KEY}}
+          HD_GCP_PROJECT_ID: ${{secrets.GCP_PROJECT_ID}}
+          HD_MELODY_DISCORD_TOKEN: ${{secrets.MELODY_DISCORD_TOKEN}}
+          HD_ENV: ${{secrets.ENV}}
