@@ -16,6 +16,8 @@ jobs:
           heroku_api_key: ${{secrets.HEROKU_API_KEY}}
           heroku_app_name: ${{ secrets.HEROKU_APP_NAME }}
           heroku_email: ${{ secrets.HEROKU_EMAIL }}
+          stack: container
+          usedocker: true
         env:
           HD_GCP_CLIENT_ID: ${{secrets.GCP_CLIENT_ID}}
           HD_GCP_CLIENT_EMAIL: ${{secrets.GCP_CLIENT_EMAIL}}
