@@ -18,6 +18,7 @@ jobs:
           heroku_email: ${{ secrets.HEROKU_EMAIL }}
           stack: container
           usedocker: true
+          docker_heroku_process_type: worker
         env:
           HD_GCP_CLIENT_ID: ${{secrets.GCP_CLIENT_ID}}
           HD_GCP_CLIENT_EMAIL: ${{secrets.GCP_CLIENT_EMAIL}}
