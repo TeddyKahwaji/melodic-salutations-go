@@ -245,7 +245,7 @@ func (g *greeterRunner) globalPlay() {
 
 func (g *greeterRunner) voiceUpdate(session *discordgo.Session, vc *discordgo.VoiceStateUpdate) {
 	hasJoined := vc.BeforeUpdate == nil && !vc.VoiceState.Member.User.Bot && vc.ChannelID != ""
-	hasLeft := vc.BeforeUpdate != nil && !vc.Member.User.Bot
+	hasLeft := vc != nil && vc.BeforeUpdate != nil && !vc.Member.User.Bot
 
 	ctx := context.Background()
 	isInBlacklist, err := g.isInBlacklist(ctx, vc.VoiceState.Member.User.ID)
@@ -268,17 +268,17 @@ func (g *greeterRunner) voiceUpdate(session *discordgo.Session, vc *discordgo.Vo
 			g.Unlock() // Unlock before returning
 			return
 		}
-
-		channel, err := session.Channel(vc.BeforeUpdate.ChannelID)
+		channelMemberCount, err := util.GetVoiceChannelMemberCount(session, vc.BeforeUpdate.GuildID, vc.BeforeUpdate.ChannelID)
 		if err != nil {
-			g.logger.Error("error getting channel", zap.Error(err), zap.String("channel_id", vc.BeforeUpdate.ChannelID))
+			g.logger.Error("error getting channel member count", zap.Error(err), zap.String("channel_id", vc.BeforeUpdate.ChannelID), zap.String("guild_id", vc.BeforeUpdate.GuildID))
 			g.Unlock() // Unlock before returning
 			return
 		}
 
-		if channel.MemberCount == 0 && vc.VoiceState != nil {
-			if vc, ok := session.VoiceConnections[vc.GuildID]; ok {
-				if err := vc.Disconnect(); err != nil {
+		// Only bot left in server
+		if channelMemberCount == 1 {
+			if botVoiceConnection, ok := session.VoiceConnections[vc.GuildID]; ok && botVoiceConnection.ChannelID == vc.BeforeUpdate.ChannelID {
+				if err := botVoiceConnection.Disconnect(); err != nil {
 					g.logger.Error("error disconnecting from channel", zap.Error(err), zap.String("channel_id", vc.ChannelID))
 					g.Unlock() // Unlock before returning
 					return
