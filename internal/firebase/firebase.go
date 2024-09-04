@@ -73,7 +73,6 @@ func (f *firebaseAdapter) CreateDocument(ctx context.Context, collection string,
 
 func (f *firebaseAdapter) DeleteDocument(ctx context.Context, collection string, document string) error {
 	_, err := f.firestoreClient.Collection(collection).Doc(document).Delete(ctx)
-
 	if err != nil {
 		return fmt.Errorf("error deleting document from collection: %w", err)
 	}

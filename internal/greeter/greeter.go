@@ -210,11 +210,10 @@ func (g *greeterRunner) globalPlay() {
 
 func (g *greeterRunner) voiceUpdate(session *discordgo.Session, vc *discordgo.VoiceStateUpdate) {
 	hasJoined := vc.BeforeUpdate == nil && !vc.VoiceState.Member.User.Bot && vc.ChannelID != ""
-	hasLeft := vc.BeforeUpdate != nil && !vc.Member.User.Bot
+	hasLeft := vc != nil && vc.BeforeUpdate != nil && !vc.Member.User.Bot
 
 	ctx := context.Background()
 	isInBlacklist, err := g.isInBlacklist(ctx, vc.VoiceState.Member.User.ID)
-
 	if err != nil {
 		g.logger.Warn("unable to check blacklist status for user", zap.Error(err), zap.String("user_id", vc.VoiceState.Member.User.ID))
 	}
@@ -234,17 +233,17 @@ func (g *greeterRunner) voiceUpdate(session *discordgo.Session, vc *discordgo.Vo
 			g.Unlock() // Unlock before returning
 			return
 		}
-
-		channel, err := session.Channel(vc.BeforeUpdate.ChannelID)
+		channelMemberCount, err := util.GetVoiceChannelMemberCount(session, vc.BeforeUpdate.GuildID, vc.BeforeUpdate.ChannelID)
 		if err != nil {
-			g.logger.Error("error getting channel", zap.Error(err), zap.String("channel_id", vc.BeforeUpdate.ChannelID))
+			g.logger.Error("error getting channel member count", zap.Error(err), zap.String("channel_id", vc.BeforeUpdate.ChannelID), zap.String("guild_id", vc.BeforeUpdate.GuildID))
 			g.Unlock() // Unlock before returning
 			return
 		}
 
-		if channel.MemberCount == 0 && vc.VoiceState != nil {
-			if vc, ok := session.VoiceConnections[vc.GuildID]; ok {
-				if err := vc.Disconnect(); err != nil {
+		// Only bot left in server
+		if channelMemberCount == 1 {
+			if botVoiceConnection, ok := session.VoiceConnections[vc.GuildID]; ok && botVoiceConnection.ChannelID == vc.BeforeUpdate.ChannelID {
+				if err := botVoiceConnection.Disconnect(); err != nil {
 					g.logger.Error("error disconnecting from channel", zap.Error(err), zap.String("channel_id", vc.ChannelID))
 					g.Unlock() // Unlock before returning
 					return
@@ -505,7 +504,6 @@ func (g *greeterRunner) upload(session *discordgo.Session, interaction *discordg
 					embeds.SuccessfulAudioFileUploadEmbed(member, interaction.Member, audioType, signedURL),
 				},
 			})
-
 			if err != nil {
 				g.logger.Error("error unable to send follow up embed: %v", zap.Error(err))
 				return err
@@ -837,7 +835,6 @@ func (g *greeterRunner) messageComponentHandler(session *discordgo.Session, inte
 			Embeds:     &[]*discordgo.MessageEmbed{state.Pages[state.CurrentPage]},
 			Components: &components,
 		})
-
 		if err != nil {
 			g.logger.Warn("error editing complex message", zap.Error(err))
 		}
@@ -858,7 +855,6 @@ func (g *greeterRunner) help(session *discordgo.Session, interaction *discordgo.
 			Flags:  discordgo.MessageFlagsEphemeral,
 		},
 	})
-
 	if err != nil {
 		return err
 	}
@@ -892,7 +888,6 @@ func (g *greeterRunner) blacklist(session *discordgo.Session, interaction *disco
 				Flags:  discordgo.MessageFlagsEphemeral,
 			},
 		})
-
 		if err != nil {
 			return fmt.Errorf("error attempting to send already on blacklist embed message: %w", err)
 		}
@@ -902,7 +897,6 @@ func (g *greeterRunner) blacklist(session *discordgo.Session, interaction *disco
 	err = g.firebaseAdapter.CreateDocument(ctx, BlacklistCollection, interaction.Member.User.ID, &blacklistRecord{
 		AddedOn: time.Now(),
 	})
-
 	if err != nil {
 		return fmt.Errorf("error attempting to create firebase document containing blacklist information: %w", err)
 	}
@@ -914,7 +908,6 @@ func (g *greeterRunner) blacklist(session *discordgo.Session, interaction *disco
 			Flags:  discordgo.MessageFlagsEphemeral,
 		},
 	})
-
 	if err != nil {
 		return fmt.Errorf("error attempting to send response: %w", err)
 	}
@@ -925,7 +918,6 @@ func (g *greeterRunner) blacklist(session *discordgo.Session, interaction *disco
 func (g *greeterRunner) whitelist(session *discordgo.Session, interaction *discordgo.InteractionCreate) error {
 	ctx := context.Background()
 	isInBlacklist, err := g.isInBlacklist(ctx, interaction.Member.User.ID)
-
 	if err != nil {
 		return fmt.Errorf("error attempting to check if user is in blacklist: %w", err)
 	}
@@ -938,7 +930,6 @@ func (g *greeterRunner) whitelist(session *discordgo.Session, interaction *disco
 				Flags:  discordgo.MessageFlagsEphemeral,
 			},
 		})
-
 		if err != nil {
 			return fmt.Errorf("error attempting to send response: %w", err)
 		}
@@ -947,7 +938,6 @@ func (g *greeterRunner) whitelist(session *discordgo.Session, interaction *disco
 	}
 
 	err = g.firebaseAdapter.DeleteDocument(ctx, BlacklistCollection, interaction.Member.User.ID)
-
 	if err != nil {
 		return fmt.Errorf("error deleting document: %w", err)
 	}
@@ -959,7 +949,6 @@ func (g *greeterRunner) whitelist(session *discordgo.Session, interaction *disco
 			Flags:  discordgo.MessageFlagsEphemeral,
 		},
 	})
-
 	if err != nil {
 		return fmt.Errorf("error attempting to send response: %w", err)
 	}
