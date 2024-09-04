@@ -913,24 +913,34 @@ func (g *greeterRunner) messageComponentHandler(session *discordgo.Session, inte
 
 					options := []discordgo.SelectMenuOption{}
 					var minBound, maxBound int
+					totalItems := len(state.SelectMenuData)
+					itemsPerPage := 4 // maximum items per page
+
 					if state.CurrentPage == 0 {
+						// First page: Show the first set of items
 						minBound = 0
-						maxBound = min(3, len(state.SelectMenuData))
+						maxBound = min(itemsPerPage, totalItems)
 					} else if state.CurrentPage == len(state.Pages)-1 {
-						minBound = state.SelectMenuBound
+						// Last page: Show the last set of items
+						minBound = max(0, len(state.SelectMenuData)-len(state.Pages[state.CurrentPage].Fields))
 						maxBound = len(state.SelectMenuData)
 					} else if forwardButtonPressed {
+						// Moving forward: Adjust bounds based on the current bounds
 						minBound = state.SelectMenuBound
-						maxBound = min(state.SelectMenuBound+3, len(state.SelectMenuData))
+						maxBound = min(state.SelectMenuBound+itemsPerPage, totalItems)
 					} else {
-						minBound = max(state.SelectMenuBound-3, 0)
-						maxBound = state.SelectMenuBound
+						minBound = state.SelectMenuBound - (itemsPerPage * 2)
+						maxBound = state.SelectMenuBound - 4
 					}
 
+					// Ensure maxBound is not greater than the total number of items
+					if maxBound > totalItems {
+						maxBound = totalItems
+					}
 					for i, value := range state.SelectMenuData[minBound:maxBound] {
 						options = append(options, discordgo.SelectMenuOption{Label: fmt.Sprintf("%s's Voiceline %d", member.User.Username, i+minBound+1), Value: value})
 					}
-
+					selectMenu.MaxValues = len(options)
 					selectMenu.Options = options
 					state.SelectMenuBound = maxBound
 					selectMenuActionRow.Components[0] = selectMenu
@@ -1068,6 +1078,13 @@ func (g *greeterRunner) whitelist(session *discordgo.Session, interaction *disco
 }
 
 func (g *greeterRunner) delete(session *discordgo.Session, interaction *discordgo.InteractionCreate) error {
+	if err := session.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
+	}); err != nil {
+		g.logger.Error("error attempting to defer message in upload command", zap.Error(err))
+		return err
+	}
+
 	options := interaction.ApplicationCommandData().Options
 	memberID, audioType := options[0].Value.(string), options[1].Value.(string)
 
@@ -1089,11 +1106,15 @@ func (g *greeterRunner) delete(session *discordgo.Session, interaction *discordg
 	data, err := g.firebaseAdapter.GetDocumentFromCollection(ctx, collection, memberID)
 	if err != nil {
 		if status.Code(err) == codes.NotFound {
-			_, err := session.FollowupMessageCreate(interaction.Interaction, true, &discordgo.WebhookParams{
-				Embeds: []*discordgo.MessageEmbed{embeds.NoDataForMemberEmbed(audioType, member.DisplayName())},
+			message, err := session.FollowupMessageCreate(interaction.Interaction, true, &discordgo.WebhookParams{
+				Embeds: []*discordgo.MessageEmbed{embeds.NoDataForMemberEmbed(audioType, member.User.Username)},
 			})
 			if err != nil {
 				return fmt.Errorf("error sending follow up message that no data exists for user: %w", err)
+			}
+
+			if err := util.DeleteMessageAfterTime(session, interaction.ChannelID, message.ID, time.Minute*1); err != nil {
+				g.logger.Warn("failed to delete message with delay", zap.Error(err))
 			}
 
 			return nil
@@ -1117,7 +1138,7 @@ func (g *greeterRunner) delete(session *discordgo.Session, interaction *discordg
 	paginationComponent := embeds.GetPaginationComponent(false, true, false, false)
 
 	menuOptions := make(map[string]string)
-	menuBound := min(len(trackNames), 3)
+	menuBound := min(len(trackNames), 4)
 	for i, trackName := range trackNames[:menuBound] {
 		menuOptions[fmt.Sprintf("%s's voiceline %d", member.User.Username, i+1)] = trackName
 	}
@@ -1129,27 +1150,31 @@ func (g *greeterRunner) delete(session *discordgo.Session, interaction *discordg
 
 	successEmbeds := embeds.GetSuccessfulAudioRetrievalEmbeds(member, audioType, urls)
 
-	err = session.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
+	var message *discordgo.Message
+	if len(successEmbeds) == 1 {
+		message, err = session.FollowupMessageCreate(interaction.Interaction, true, &discordgo.WebhookParams{
+			Embeds: []*discordgo.MessageEmbed{successEmbeds[0]},
+		})
+
+		if err != nil {
+			return fmt.Errorf("error sending follow up delete message: %w", err)
+		}
+	} else {
+		message, err = session.FollowupMessageCreate(interaction.Interaction, true, &discordgo.WebhookParams{
 			Components: paginationComponent,
 			Embeds:     []*discordgo.MessageEmbed{successEmbeds[0]},
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("error sending paginated delete menu: %w", err)
-	}
+		})
 
-	message, err := session.InteractionResponse(interaction.Interaction)
-	if err != nil {
-		return fmt.Errorf("error sending follow up interaction response: %w", err)
-	}
+		if err != nil {
+			return fmt.Errorf("error sending paginated delete menu: %w", err)
+		}
 
-	g.messageStore[message.ID] = &paginationState{
-		Pages:           successEmbeds,
-		CurrentPage:     0,
-		SelectMenuData:  trackNames,
-		SelectMenuBound: menuBound,
+		g.messageStore[message.ID] = &paginationState{
+			Pages:           successEmbeds,
+			CurrentPage:     0,
+			SelectMenuData:  trackNames,
+			SelectMenuBound: menuBound,
+		}
 	}
 
 	if err := util.DeleteMessageAfterTime(session, interaction.ChannelID, message.ID, time.Minute*2); err != nil {
