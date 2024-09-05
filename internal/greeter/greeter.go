@@ -246,7 +246,9 @@ func (g *greeterRunner) globalPlay() {
 
 func (g *greeterRunner) voiceUpdate(session *discordgo.Session, vc *discordgo.VoiceStateUpdate) {
 	hasJoined := vc.BeforeUpdate == nil && !vc.VoiceState.Member.User.Bot && vc.ChannelID != ""
-	hasLeft := vc != nil && vc.BeforeUpdate != nil && !vc.Member.User.Bot
+	hasLeft := vc.BeforeUpdate != nil && !vc.Member.User.Bot && vc.ChannelID == ""
+
+	g.logger.Info("voice state update", zap.String("user_id", vc.Member.User.ID), zap.Bool("has_joined", hasJoined), zap.Bool("has_left", hasLeft))
 
 	ctx := context.Background()
 	isInBlacklist, err := g.isInBlacklist(ctx, vc.VoiceState.Member.User.ID)
@@ -284,17 +286,17 @@ func (g *greeterRunner) voiceUpdate(session *discordgo.Session, vc *discordgo.Vo
 		if channelMemberCount == 1 {
 			if botVoiceConnection, ok := session.VoiceConnections[vc.GuildID]; ok && botVoiceConnection.ChannelID == vc.BeforeUpdate.ChannelID {
 				if err := botVoiceConnection.Disconnect(); err != nil {
-					g.logger.Error("error disconnecting from channel", zap.Error(err), zap.String("channel_id", vc.ChannelID))
+					g.logger.Error("error disconnecting from channel", zap.Error(err), zap.String("channel_id", vc.BeforeUpdate.ChannelID))
 					g.Unlock() // Unlock before returning
 					return
 				}
 
 				delete(g.guildPlayerMappings, vc.GuildID)
 			}
+			g.Unlock()
+			return
 		}
-
 		g.Unlock() // Unlock after modifications are done
-		return
 	}
 
 	var COLLECTION string
@@ -305,25 +307,31 @@ func (g *greeterRunner) voiceUpdate(session *discordgo.Session, vc *discordgo.Vo
 	}
 
 	if hasJoined || hasLeft {
+		var targetChannelID string
+		if hasLeft {
+			targetChannelID = vc.BeforeUpdate.ChannelID
+		} else if hasJoined {
+			targetChannelID = vc.ChannelID
+		}
 		g.Lock() // Lock before accessing shared data
 
 		if _, ok := g.guildPlayerMappings[vc.GuildID]; !ok {
-			perms, err := session.UserChannelPermissions(session.State.Ready.User.ID, vc.ChannelID)
+			perms, err := session.UserChannelPermissions(session.State.Ready.User.ID, targetChannelID)
 			if err != nil {
-				g.logger.Error("unable to get permissions for channel", zap.Error(err), zap.String("channel_id", vc.ChannelID))
+				g.logger.Error("unable to get permissions for channel", zap.Error(err), zap.String("channel_id", targetChannelID))
 				g.Unlock() // Unlock before returning
 				return
 			}
 
 			if perms&int64(discordgo.PermissionVoiceConnect) == 0 || perms&int64(discordgo.PermissionVoiceSpeak) == 0 {
-				g.logger.Info("Bot will not be joining voice channel because they do not have sufficient privileges", zap.String("channel_id", vc.ChannelID))
+				g.logger.Info("Bot will not be joining voice channel because they do not have sufficient privileges", zap.String("channel_id", targetChannelID))
 				g.Unlock() // Unlock before returning
 				return
 			}
 
-			channelVoiceConnection, err := session.ChannelVoiceJoin(vc.GuildID, vc.ChannelID, false, true)
+			channelVoiceConnection, err := session.ChannelVoiceJoin(vc.GuildID, targetChannelID, false, true)
 			if err != nil {
-				g.logger.Error("error unable to join voice channel", zap.String("channel_id", vc.ChannelID), zap.String("guild_id", vc.GuildID), zap.Error(err))
+				g.logger.Error("error unable to join voice channel", zap.String("channel_id", targetChannelID), zap.String("guild_id", vc.GuildID), zap.Error(err))
 				g.Unlock() // Unlock before returning
 				return
 			}
@@ -450,17 +458,18 @@ func (g *greeterRunner) playAudio(guildPlayer *guildPlayer) {
 	guildPlayer.voiceState = Playing
 
 	for err := range doneChan {
-		if err != nil && errors.Is(err, io.EOF) {
+		if err != nil {
 			return
+		} else if errors.Is(err, io.EOF) {
+			if len(guildPlayer.queue) > 0 {
+				g.songSignal <- guildPlayer
+			} else {
+				guildPlayer.voiceState = NotPlaying
+			}
+		} else {
+			g.logger.Error("something went wrong during stream session", zap.Error(err))
 		}
 
-		g.Lock()
-		if len(guildPlayer.queue) > 0 {
-			g.songSignal <- guildPlayer
-		} else {
-			guildPlayer.voiceState = NotPlaying
-		}
-		g.Unlock()
 	}
 }
 
