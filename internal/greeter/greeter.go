@@ -248,7 +248,7 @@ func (g *greeterRunner) voiceUpdate(session *discordgo.Session, vc *discordgo.Vo
 	hasJoined := vc.BeforeUpdate == nil && !vc.VoiceState.Member.User.Bot && vc.ChannelID != ""
 	hasLeft := vc.BeforeUpdate != nil && !vc.Member.User.Bot && vc.ChannelID == ""
 
-	g.logger.Info("voice state update", zap.String("user_id", vc.Member.User.ID), zap.Bool("has_joined", hasJoined), zap.Bool("has_left", hasLeft))
+	g.logger.Info("voice state update", zap.String("user_id", vc.Member.User.ID), zap.Bool("is_bot", vc.Member.User.Bot), zap.Bool("has_joined", hasJoined), zap.Bool("has_left", hasLeft))
 
 	ctx := context.Background()
 	isInBlacklist, err := g.isInBlacklist(ctx, vc.VoiceState.Member.User.ID)
