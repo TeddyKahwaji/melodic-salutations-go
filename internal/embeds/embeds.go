@@ -237,3 +237,53 @@ func RemovedFromBlacklistEmbed(member *discordgo.Member) *discordgo.MessageEmbed
 		},
 	}
 }
+
+func AddSelectMenu(components []discordgo.MessageComponent, userID string, collection string, optionValues map[string]string) ([]discordgo.MessageComponent, error) {
+	options := []discordgo.SelectMenuOption{}
+
+	for key, value := range optionValues {
+		options = append(options, discordgo.SelectMenuOption{Label: key, Value: value})
+	}
+
+	minValues := 1
+
+	selectMenu := &discordgo.SelectMenu{
+		CustomID:  fmt.Sprintf("%s|%s", userID, collection),
+		MenuType:  discordgo.StringSelectMenu,
+		Options:   options,
+		MaxValues: len(options),
+		DefaultValues: []discordgo.SelectMenuDefaultValue{{
+			Type: discordgo.SelectMenuDefaultValueChannel,
+			ID:   "defaultValue",
+		}},
+		MinValues: &minValues,
+	}
+
+	messageComponent := components
+	messageComponent = append(messageComponent, discordgo.ActionsRow{
+		Components: []discordgo.MessageComponent{
+			selectMenu,
+		},
+	})
+
+	return messageComponent, nil
+}
+
+func DeleteCompletedSuccessEmbed(amountDeleted int, member *discordgo.Member, memberRequester *discordgo.Member) *discordgo.MessageEmbed {
+	return &discordgo.MessageEmbed{
+		Title: fmt.Sprintf("%d Voicelines have been deleted for %s", amountDeleted, member.User.Username),
+		Color: 0x67e9ff,
+		Fields: []*discordgo.MessageEmbedField{
+			{
+				Name: "**Successfully deleted voicelines 😊**",
+			},
+		},
+		Thumbnail: &discordgo.MessageEmbedThumbnail{
+			URL: member.AvatarURL(""),
+		},
+		Footer: &discordgo.MessageEmbedFooter{
+			Text:    fmt.Sprintf("Deleted by: %s", memberRequester.User.Username),
+			IconURL: memberRequester.AvatarURL(""),
+		},
+	}
+}

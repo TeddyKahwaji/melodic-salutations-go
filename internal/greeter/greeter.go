@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -52,8 +53,10 @@ const (
 )
 
 type paginationState struct {
-	CurrentPage int
-	Pages       []*discordgo.MessageEmbed
+	CurrentPage     int
+	Pages           []*discordgo.MessageEmbed
+	SelectMenuData  []string
+	SelectMenuBound int
 }
 
 type guildPlayer struct {
@@ -79,6 +82,11 @@ type trackRecord struct {
 	AddedBy   string    `firestore:"added_by"    mapstructure:"added_by"`
 	CreatedAt time.Time `firestore:"created_at"  mapstructure:"created_at"`
 	TrackName string    `firestore:"track_name"  mapstructure:"track_name"`
+}
+
+type trackData struct {
+	TrackName      string
+	TrackSignedURL string
 }
 
 type blacklistRecord struct {
@@ -177,6 +185,34 @@ func (g *greeterRunner) GetCommands() []*discordgo.ApplicationCommand {
 			},
 		},
 		{
+			Name:        "delete",
+			Description: "Delete voicelines for a given member",
+			Options: []*discordgo.ApplicationCommandOption{
+				{
+					Name:        "member",
+					Description: "A member from your server",
+					Type:        discordgo.ApplicationCommandOptionUser,
+					Required:    true,
+				},
+				{
+					Name:        "type",
+					Type:        discordgo.ApplicationCommandOptionString,
+					Description: "The voiceline type you would like view",
+					Required:    true,
+					Choices: []*discordgo.ApplicationCommandOptionChoice{
+						{
+							Name:  "Intro",
+							Value: "intro",
+						},
+						{
+							Name:  "Outro",
+							Value: "outro",
+						},
+					},
+				},
+			},
+		},
+		{
 			Name:        "help",
 			Description: "Displays the command menu",
 		},
@@ -216,6 +252,10 @@ func (g *greeterRunner) voiceUpdate(session *discordgo.Session, vc *discordgo.Vo
 	isInBlacklist, err := g.isInBlacklist(ctx, vc.VoiceState.Member.User.ID)
 	if err != nil {
 		g.logger.Warn("unable to check blacklist status for user", zap.Error(err), zap.String("user_id", vc.VoiceState.Member.User.ID))
+	}
+
+	if isInBlacklist {
+		return
 	}
 
 	if hasLeft {
@@ -265,10 +305,6 @@ func (g *greeterRunner) voiceUpdate(session *discordgo.Session, vc *discordgo.Vo
 	}
 
 	if hasJoined || hasLeft {
-		if isInBlacklist {
-			return
-		}
-
 		g.Lock() // Lock before accessing shared data
 
 		if _, ok := g.guildPlayerMappings[vc.GuildID]; !ok {
@@ -358,6 +394,26 @@ func (g *greeterRunner) retrieveRandomAudioName(ctx context.Context, collection 
 	}
 
 	return "", nil
+}
+
+func (g *greeterRunner) retrieveTracks(ctx context.Context, collection string, userId string) ([]interface{}, error) {
+	data, err := g.firebaseAdapter.GetDocumentFromCollection(ctx, collection, userId)
+	if err != nil {
+		return nil, fmt.Errorf("error getting document from collection: %w", err)
+	}
+
+	audioListKey := OutroArrayKey
+	if collection == WelcomeCollection {
+		audioListKey = IntroArrayKey
+	}
+
+	if audioArray, ok := data[audioListKey]; ok {
+		if audioSlice, ok := audioArray.([]interface{}); ok {
+			return audioSlice, nil
+		}
+	}
+
+	return nil, fmt.Errorf("error key was not found: %w", err)
 }
 
 func (g *greeterRunner) playAudio(guildPlayer *guildPlayer) {
@@ -669,6 +725,42 @@ func (g *greeterRunner) upload(session *discordgo.Session, interaction *discordg
 	return nil
 }
 
+func (g *greeterRunner) extractAudioTracksForUser(ctx context.Context, data map[string]interface{}, audioKey string) ([]trackData, error) {
+	tracks := []trackData{}
+
+	if data, ok := data[audioKey].([]interface{}); ok {
+		eg, _ := errgroup.WithContext(ctx)
+		for _, trackRecord := range data {
+			if track, ok := trackRecord.(map[string]interface{}); ok {
+				eg.Go(func() error {
+					trackTitle := track["track_name"].(string)
+
+					g.Lock()
+
+					urlData, err := g.firebaseAdapter.GenerateSignedURL(BucketName, fmt.Sprintf("voicelines/"+trackTitle))
+					if err != nil {
+						return err
+					}
+					tracks = append(tracks, trackData{
+						TrackName:      trackTitle,
+						TrackSignedURL: urlData,
+					})
+
+					g.Unlock()
+					return nil
+				})
+			}
+		}
+
+		if err := eg.Wait(); err != nil {
+			return nil, fmt.Errorf("error retrieving generated signed urls %w", err)
+		}
+		return tracks, nil
+	}
+
+	return nil, errors.New("error could not cast record")
+}
+
 func (g *greeterRunner) voicelines(session *discordgo.Session, interaction *discordgo.InteractionCreate) error {
 	options := interaction.ApplicationCommandData().Options
 	memberID, audioType := options[0].Value.(string), options[1].Value.(string)
@@ -722,40 +814,14 @@ func (g *greeterRunner) voicelines(session *discordgo.Session, interaction *disc
 		return errors.New("audio key not found in document")
 	}
 
-	urls := []string{}
-
-	if data, ok := data[audioListKey].([]interface{}); ok {
-		eg, _ := errgroup.WithContext(ctx)
-
-		for _, trackRecord := range data {
-			if track, ok := trackRecord.(map[string]interface{}); ok {
-				eg.Go(func() error {
-					trackTitle := track["track_name"].(string)
-
-					signedUrl, err := g.firebaseAdapter.GenerateSignedURL(BucketName, fmt.Sprintf("voicelines/"+trackTitle))
-					if err != nil {
-						return err
-					}
-
-					g.Lock()
-					urls = append(urls, signedUrl)
-					g.Unlock()
-					return nil
-				})
-			}
-		}
-
-		if err := eg.Wait(); err != nil {
-			return fmt.Errorf("error retrieving generated signed urls %w", err)
-		}
-	} else {
-		return errors.New("error could not cast record")
+	trackData, err := g.extractAudioTracksForUser(ctx, data, audioListKey)
+	if err != nil {
+		return fmt.Errorf("unable to extract audio track for user: %v", err)
 	}
 
-	if data, ok := data[audioListKey].([]map[string]interface{}); ok {
-		for _, trackRecord := range data[:4] {
-			urls = append(urls, trackRecord["track_name"].(string))
-		}
+	urls := make([]string, 0, len(trackData))
+	for _, data := range trackData {
+		urls = append(urls, data.TrackSignedURL)
 	}
 
 	successEmbeds := embeds.GetSuccessfulAudioRetrievalEmbeds(member, audioType, urls)
@@ -814,6 +880,14 @@ func (g *greeterRunner) messageComponentHandler(session *discordgo.Session, inte
 		return
 	}
 
+	ctx := context.Background()
+
+	var forwardButtonPressed bool
+
+	var member *discordgo.Member
+
+	var err error
+
 	if state, exists := g.messageStore[interaction.Message.ID]; exists {
 		switch interaction.MessageComponentData().CustomID {
 		case "first":
@@ -830,14 +904,170 @@ func (g *greeterRunner) messageComponentHandler(session *discordgo.Session, inte
 			if state.CurrentPage >= len(state.Pages) {
 				state.CurrentPage = 0
 			}
+
+			forwardButtonPressed = true
+		default:
+			componentData := strings.Split(interaction.MessageComponentData().CustomID, "|")
+			memberID, collection := componentData[0], componentData[1]
+			member, err = session.GuildMember(interaction.GuildID, memberID)
+			if err != nil {
+				g.logger.Warn("unable to update select menu component, could not get guild member", zap.Error(err), zap.String("user_id", memberID))
+				return
+			}
+
+			valuesSelected := interaction.MessageComponentData().Values
+			audioListKey := IntroArrayKey
+			if collection == OutroCollection {
+				audioListKey = OutroArrayKey
+			}
+
+			eg, ctx := errgroup.WithContext(ctx)
+			tracks, err := g.retrieveTracks(ctx, collection, memberID)
+			if err != nil {
+				g.logger.Error("error retrieving users tracks", zap.Error(err), zap.String("user_id", memberID))
+				return
+			}
+
+			for _, trackId := range valuesSelected {
+				eg.Go(func() error {
+					voicelineTrackPath := fmt.Sprintf("voicelines/%s", trackId)
+					archiveTrackPath := fmt.Sprintf("archive/%s/%s", memberID, trackId)
+					if err := g.firebaseAdapter.CloneFileFromStorage(ctx, BucketName, voicelineTrackPath, archiveTrackPath); err != nil {
+						return err
+					}
+
+					if err := g.firebaseAdapter.DeleteFileFromStorage(ctx, BucketName, voicelineTrackPath); err != nil {
+						return err
+					}
+
+					trackRecordToBeRemoved := make(map[string]interface{}, 3)
+
+					for _, track := range tracks {
+						if recordMap, ok := track.(map[string]interface{}); ok {
+							if recordMap["track_name"].(string) == trackId {
+								trackRecordToBeRemoved["track_name"] = recordMap["track_name"].(string)
+								trackRecordToBeRemoved["added_by"] = recordMap["added_by"].(string)
+								if time, ok := recordMap["created_at"].(time.Time); ok {
+									trackRecordToBeRemoved["created_at"] = time
+								}
+								break
+							}
+						}
+					}
+					data := map[string]interface{}{
+						audioListKey: firestore.ArrayRemove(trackRecordToBeRemoved),
+					}
+
+					if err := g.firebaseAdapter.UpdateDocument(ctx, collection, memberID, data); err != nil {
+						return err
+					}
+					return nil
+				})
+			}
+
+			if err := eg.Wait(); err != nil {
+				g.logger.Error("error deleting voicelines for user", zap.Error(err), zap.String("collection", collection), zap.String("user_id", memberID))
+				return
+			}
+
+			message, err := session.ChannelMessageEditComplex(&discordgo.MessageEdit{
+				ID:         interaction.Message.ID,
+				Channel:    interaction.ChannelID,
+				Components: &[]discordgo.MessageComponent{},
+				Embeds:     &[]*discordgo.MessageEmbed{embeds.DeleteCompletedSuccessEmbed(len(valuesSelected), member, interaction.Member)},
+			})
+			if err != nil {
+				g.logger.Warn("error editing complex message", zap.Error(err))
+				return
+			}
+
+			if err := util.DeleteMessageAfterTime(session, interaction.ChannelID, message.ID, time.Second*30); err != nil {
+				g.logger.Warn("unable to delete message")
+			}
+
+			return
 		}
 
-		components := embeds.GetPaginationComponent(state.CurrentPage == 0, state.CurrentPage == 0, state.CurrentPage == len(state.Pages)-1, state.CurrentPage == len(state.Pages)-1)
-		_, err := session.ChannelMessageEditComplex(&discordgo.MessageEdit{
+		message, err := session.ChannelMessage(interaction.ChannelID, interaction.Message.ID)
+		if err != nil {
+			g.logger.Warn("error retrieving channel message in component handler", zap.Error(err))
+			return
+		}
+
+		buttonStatusMapping := map[int]bool{
+			0: state.CurrentPage == 0,
+			1: state.CurrentPage == 0,
+			2: state.CurrentPage == len(state.Pages)-1,
+			3: state.CurrentPage == len(state.Pages)-1,
+		}
+
+		// Update button disabled status
+		if buttonsActionRow, ok := message.Components[0].(*discordgo.ActionsRow); ok {
+			for buttonIndex, buttonDisabled := range buttonStatusMapping {
+				if buttonData, ok := buttonsActionRow.Components[buttonIndex].(*discordgo.Button); ok {
+					buttonData.Disabled = buttonDisabled
+					buttonsActionRow.Components[buttonIndex] = buttonData
+				}
+			}
+			message.Components[0] = buttonsActionRow
+		}
+
+		// Update select menu data
+		if state.SelectMenuData != nil {
+			if selectMenuActionRow, ok := message.Components[1].(*discordgo.ActionsRow); ok {
+				if selectMenu, ok := selectMenuActionRow.Components[0].(*discordgo.SelectMenu); ok {
+					componentData := strings.Split(selectMenu.CustomID, "|")
+					memberID, _ := componentData[0], componentData[1]
+					member, err = session.GuildMember(interaction.GuildID, memberID)
+					if err != nil {
+						g.logger.Warn("unable to update select menu component, could not get guild member", zap.Error(err), zap.String("user_id", memberID))
+						return
+					}
+					options := []discordgo.SelectMenuOption{}
+					var minBound, maxBound int
+					totalItems := len(state.SelectMenuData)
+					itemsPerPage := 4 // maximum items per page
+
+					if state.CurrentPage == 0 {
+						// First page: Show the first set of items
+						minBound = 0
+						maxBound = min(itemsPerPage, totalItems)
+					} else if state.CurrentPage == len(state.Pages)-1 {
+						// Last page: Show the last set of items
+						minBound = max(0, len(state.SelectMenuData)-len(state.Pages[state.CurrentPage].Fields))
+						maxBound = len(state.SelectMenuData)
+					} else if forwardButtonPressed {
+						// Moving forward: Adjust bounds based on the current bounds
+						minBound = state.SelectMenuBound
+						maxBound = min(state.SelectMenuBound+itemsPerPage, totalItems)
+					} else {
+						fieldsInPageAfter := len(state.Pages[state.CurrentPage+1].Fields)
+						maxBound = state.SelectMenuBound - fieldsInPageAfter
+						minBound = maxBound - 4
+					}
+
+					// Ensure maxBound is not greater than the total number of items
+					if maxBound > totalItems {
+						maxBound = totalItems
+					}
+
+					for i := minBound; i < maxBound; i++ {
+						options = append(options, discordgo.SelectMenuOption{Label: fmt.Sprintf("%s's Voiceline %d", member.User.Username, i+1), Value: state.SelectMenuData[i]})
+					}
+					selectMenu.MaxValues = len(options)
+					selectMenu.Options = options
+					state.SelectMenuBound = maxBound
+					selectMenuActionRow.Components[0] = selectMenu
+				}
+				message.Components[1] = selectMenuActionRow
+			}
+		}
+
+		_, err = session.ChannelMessageEditComplex(&discordgo.MessageEdit{
 			ID:         interaction.Message.ID,
 			Channel:    interaction.ChannelID,
 			Embeds:     &[]*discordgo.MessageEmbed{state.Pages[state.CurrentPage]},
-			Components: &components,
+			Components: &message.Components,
 		})
 		if err != nil {
 			g.logger.Warn("error editing complex message", zap.Error(err))
@@ -960,6 +1190,115 @@ func (g *greeterRunner) whitelist(session *discordgo.Session, interaction *disco
 	return nil
 }
 
+func (g *greeterRunner) delete(session *discordgo.Session, interaction *discordgo.InteractionCreate) error {
+	if err := session.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
+	}); err != nil {
+		g.logger.Error("error attempting to defer message in upload command", zap.Error(err))
+		return err
+	}
+
+	options := interaction.ApplicationCommandData().Options
+	memberID, audioType := options[0].Value.(string), options[1].Value.(string)
+
+	member, err := session.State.Member(interaction.GuildID, memberID)
+	if err != nil {
+		g.logger.Error("error getting member data", zap.Error(err), zap.String("user_id", memberID))
+		return err
+	}
+
+	ctx := context.Background()
+	collection := WelcomeCollection
+	audioKey := IntroArrayKey
+
+	if audioType == "outro" {
+		collection = OutroCollection
+		audioKey = OutroArrayKey
+	}
+
+	data, err := g.firebaseAdapter.GetDocumentFromCollection(ctx, collection, memberID)
+	if err != nil {
+		if status.Code(err) == codes.NotFound {
+			message, err := session.FollowupMessageCreate(interaction.Interaction, true, &discordgo.WebhookParams{
+				Embeds: []*discordgo.MessageEmbed{embeds.NoDataForMemberEmbed(audioType, member.User.Username)},
+			})
+			if err != nil {
+				return fmt.Errorf("error sending follow up message that no data exists for user: %w", err)
+			}
+
+			if err := util.DeleteMessageAfterTime(session, interaction.ChannelID, message.ID, time.Minute*1); err != nil {
+				g.logger.Warn("failed to delete message with delay", zap.Error(err))
+			}
+
+			return nil
+		}
+
+		return fmt.Errorf("error unable to get document from collection: %w", err)
+	}
+
+	trackData, err := g.extractAudioTracksForUser(ctx, data, audioKey)
+	if err != nil {
+		return fmt.Errorf("error extracting audio track for user: %w", err)
+	}
+
+	trackNames := make([]string, 0, len(trackData))
+	urls := make([]string, 0, len(trackData))
+	for _, data := range trackData {
+		trackNames = append(trackNames, data.TrackName)
+		urls = append(urls, data.TrackSignedURL)
+	}
+
+	successEmbeds := embeds.GetSuccessfulAudioRetrievalEmbeds(member, audioType, urls)
+	paginationComponent := embeds.GetPaginationComponent(false, true, false, false)
+
+	menuOptions := make(map[string]string)
+	menuBound := min(len(trackNames), 4)
+	for i, trackName := range trackNames[:menuBound] {
+		menuOptions[fmt.Sprintf("%s's voiceline %d", member.User.Username, i+1)] = trackName
+	}
+
+	paginationComponent, err = embeds.AddSelectMenu(paginationComponent, memberID, collection, menuOptions)
+	if err != nil {
+		return fmt.Errorf("error adding select menu: %w", err)
+	}
+
+	var message *discordgo.Message
+	if len(successEmbeds) == 1 {
+		components, err := embeds.AddSelectMenu([]discordgo.MessageComponent{}, memberID, collection, menuOptions)
+		if err != nil {
+			return fmt.Errorf("error adding select menu to single page delete menu: %w", err)
+		}
+
+		message, err = session.FollowupMessageCreate(interaction.Interaction, true, &discordgo.WebhookParams{
+			Embeds:     []*discordgo.MessageEmbed{successEmbeds[0]},
+			Components: components,
+		})
+		if err != nil {
+			return fmt.Errorf("error sending follow up delete message: %w", err)
+		}
+	} else {
+		message, err = session.FollowupMessageCreate(interaction.Interaction, true, &discordgo.WebhookParams{
+			Components: paginationComponent,
+			Embeds:     []*discordgo.MessageEmbed{successEmbeds[0]},
+		})
+		if err != nil {
+			return fmt.Errorf("error sending paginated delete menu: %w", err)
+		}
+	}
+
+	g.messageStore[message.ID] = &paginationState{
+		Pages:           successEmbeds,
+		CurrentPage:     0,
+		SelectMenuData:  trackNames,
+		SelectMenuBound: menuBound,
+	}
+	if err := util.DeleteMessageAfterTime(session, interaction.ChannelID, message.ID, time.Minute*2); err != nil {
+		g.logger.Warn("failed to delete message with delay", zap.Error(err), zap.String("message_id", message.ID))
+	}
+
+	return nil
+}
+
 func (g *greeterRunner) greeterHandler(session *discordgo.Session, interaction *discordgo.InteractionCreate) {
 	if interaction.Type != discordgo.InteractionApplicationCommand {
 		return
@@ -978,6 +1317,8 @@ func (g *greeterRunner) greeterHandler(session *discordgo.Session, interaction *
 		err = g.blacklist(session, interaction)
 	case "whitelist":
 		err = g.whitelist(session, interaction)
+	case "delete":
+		err = g.delete(session, interaction)
 	}
 
 	if err != nil {

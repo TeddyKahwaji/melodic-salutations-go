@@ -14,13 +14,15 @@ import (
 )
 
 type Firebase interface {
-	GetDocumentFromCollection(ctx context.Context, collection string, document string) (map[string]interface{}, error)
-	GenerateSignedURL(bucketName string, objectName string) (string, error)
-	DownloadFileBytes(ctx context.Context, bucketName string, objectName string) (io.Reader, error)
-	UploadFileToStorage(ctx context.Context, bucketName string, objectName string, file *os.File, fileName string) error
-	UpdateDocument(ctx context.Context, collection string, document string, data map[string]interface{}) error
 	CreateDocument(ctx context.Context, collection string, document string, data interface{}) error
 	DeleteDocument(ctx context.Context, collection string, document string) error
+	CloneFileFromStorage(ctx context.Context, bucketName string, sourceObject string, destinationObject string) error
+	DeleteFileFromStorage(ctx context.Context, bucketName string, objectName string) error
+	DownloadFileBytes(ctx context.Context, bucketName string, objectName string) (io.Reader, error)
+	GetDocumentFromCollection(ctx context.Context, collection string, document string) (map[string]interface{}, error)
+	GenerateSignedURL(bucketName string, objectName string) (string, error)
+	UpdateDocument(ctx context.Context, collection string, document string, data map[string]interface{}) error
+	UploadFileToStorage(ctx context.Context, bucketName string, objectName string, file *os.File, fileName string) error
 }
 
 type firebaseAdapter struct {
@@ -35,6 +37,24 @@ func NewFirebaseHelper(firestoreClient *fs.Client, storageClient *gs.Client, log
 		cloudStorageClient: storageClient,
 		logger:             logger,
 	}
+}
+
+func (f *firebaseAdapter) CloneFileFromStorage(ctx context.Context, bucketName string, sourceObject string, destinationObject string) error {
+	source := f.cloudStorageClient.Bucket(bucketName).Object(sourceObject)
+	if _, err := f.cloudStorageClient.Bucket(bucketName).Object(destinationObject).CopierFrom(source).Run(ctx); err != nil {
+		return fmt.Errorf("error cloning object to destination: %w", err)
+	}
+
+	return nil
+}
+
+func (f *firebaseAdapter) DeleteFileFromStorage(ctx context.Context, bucketName string, objectName string) error {
+	bucket := f.cloudStorageClient.Bucket(bucketName).Object(objectName)
+	if err := bucket.Delete(ctx); err != nil {
+		return fmt.Errorf("error deleting object from bucket: %w", err)
+	}
+
+	return nil
 }
 
 func (f *firebaseAdapter) UploadFileToStorage(ctx context.Context, bucketName string, objectName string, file *os.File, fileName string) error {
