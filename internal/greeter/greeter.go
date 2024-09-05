@@ -303,7 +303,11 @@ func (g *greeterRunner) voiceUpdate(session *discordgo.Session, vc *discordgo.Vo
 
 		randomAudioTrack, err := g.retrieveRandomAudioName(ctx, COLLECTION, vc.UserID)
 		if err != nil {
-			g.logger.Error("failed to get random audio track from firestore", zap.Error(err))
+			if status.Code(err) == codes.NotFound {
+				g.logger.Info("voiceline won't be played because user does not have intro/outro", zap.String("user_id", vc.UserID))
+			} else {
+				g.logger.Error("failed to get random audio track from firestore", zap.Error(err), zap.String("user_id", vc.UserID))
+			}
 			g.Unlock() // Unlock before returning
 			return
 		}
