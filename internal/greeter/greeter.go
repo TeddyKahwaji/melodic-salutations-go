@@ -262,7 +262,6 @@ func (g *greeterRunner) voiceUpdate(session *discordgo.Session, vc *discordgo.Vo
 
 	if hasLeft {
 		g.Lock() // Lock before accessing shared data
-
 		perms, err := session.UserChannelPermissions(session.State.Ready.User.ID, vc.BeforeUpdate.ChannelID)
 		if err != nil {
 			g.logger.Error("unable to get permissions for channel", zap.Error(err), zap.String("channel_id", vc.BeforeUpdate.ChannelID))
@@ -459,17 +458,18 @@ func (g *greeterRunner) playAudio(guildPlayer *guildPlayer) {
 
 	for err := range doneChan {
 		if err != nil {
-			return
-		} else if errors.Is(err, io.EOF) {
-			if len(guildPlayer.queue) > 0 {
-				g.songSignal <- guildPlayer
+			if errors.Is(err, io.EOF) {
+				if len(guildPlayer.queue) > 0 {
+					g.songSignal <- guildPlayer
+				} else {
+					guildPlayer.voiceState = NotPlaying
+				}
 			} else {
-				guildPlayer.voiceState = NotPlaying
+				g.logger.Error("error during audio stream")
 			}
 		} else {
 			g.logger.Error("something went wrong during stream session", zap.Error(err))
 		}
-
 	}
 }
 
@@ -1033,7 +1033,9 @@ func (g *greeterRunner) messageComponentHandler(session *discordgo.Session, inte
 						return
 					}
 					options := []discordgo.SelectMenuOption{}
+
 					var minBound, maxBound int
+
 					totalItems := len(state.SelectMenuData)
 					itemsPerPage := 4 // maximum items per page
 
