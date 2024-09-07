@@ -28,3 +28,9 @@ jobs:
           HD_GCP_PROJECT_ID: ${{secrets.GCP_PROJECT_ID}}
           HD_MELODY_DISCORD_TOKEN: ${{secrets.MELODY_DISCORD_TOKEN}}
           HD_ENV: ${{secrets.ENV}}
+          HD_DD_API_KEY: $${{secrets.DD_API_KEY}}
+          HD_DD_DYNO_HOST: true
+          HD_DD_SITE: datadoghq.com
+          HD_DD_LOGS_ENABLED: true
+          HD_DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL: true
+          HD_DD_CONTAINER_EXCLUDE_LOGS: name:datadog-agent
