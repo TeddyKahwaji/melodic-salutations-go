@@ -14,7 +14,6 @@ FROM golang:1.23
 
 WORKDIR /usr/src/app
 
-LABEL "com.datadoghq.ad.logs"='[<LOGS_CONFIG>]'
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates ffmpeg && \
