@@ -465,7 +465,7 @@ func (g *greeterRunner) playAudio(guildPlayer *guildPlayer) {
 					guildPlayer.voiceState = NotPlaying
 				}
 			} else {
-				g.logger.Error("error during audio stream")
+				g.logger.Error("error during audio stream", zap.Error(err))
 			}
 		} else {
 			g.logger.Error("something went wrong during stream session", zap.Error(err))
