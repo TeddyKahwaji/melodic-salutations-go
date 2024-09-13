@@ -729,7 +729,7 @@ func (g *greeterRunner) upload(session *discordgo.Session, interaction *discordg
 			}
 
 			if err != nil {
-				g.logger.Error("unable to send follow up embed: %v", zap.Error(err))
+				g.logger.Error("unable to send follow up embed", zap.Error(err))
 				return err
 			}
 		}
