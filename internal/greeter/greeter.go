@@ -436,7 +436,7 @@ func (g *greeterRunner) playAudio(guildPlayer *guildPlayer) {
 
 	defer func() {
 		if err := util.DeleteFile(audioPath); err != nil {
-			g.logger.Error("error trying to delete file", zap.Error(err), zap.String("file_name", audioPath))
+			g.logger.Warn("error trying to delete file", zap.Error(err), zap.String("file_name", audioPath))
 		}
 	}()
 
@@ -513,11 +513,11 @@ func (g *greeterRunner) upload(session *discordgo.Session, interaction *discordg
 			file, err := util.DownloadFileToTempDirectory(resp.Body)
 			defer func() {
 				if err := resp.Body.Close(); err != nil {
-					g.logger.Error("error closing body", zap.Error(err))
+					g.logger.Warn("error closing body", zap.Error(err))
 				}
 
 				if err := util.DeleteFile(file.Name()); err != nil {
-					g.logger.Error("error trying to delete file", zap.Error(err), zap.String("file_name", file.Name()))
+					g.logger.Warn("error trying to delete file", zap.Error(err), zap.String("file_name", file.Name()))
 				}
 			}()
 
@@ -584,7 +584,11 @@ func (g *greeterRunner) upload(session *discordgo.Session, interaction *discordg
 				return err
 			}
 
-			defer resp.Body.Close()
+			defer func() {
+				if err := resp.Body.Close(); err != nil {
+					g.logger.Warn("error closing body from request", zap.Error(err))
+				}
+			}()
 
 			file, err := util.DownloadFileToTempDirectory(resp.Body)
 			if err != nil {
@@ -628,11 +632,11 @@ func (g *greeterRunner) upload(session *discordgo.Session, interaction *discordg
 
 					defer func() {
 						if err := f.Close(); err != nil {
-							g.logger.Error("error closing file", zap.Error(err))
+							g.logger.Warn("error closing file", zap.Error(err))
 						}
 
 						if err := util.DeleteFile(f.Name()); err != nil {
-							g.logger.Error("error trying to delete file", zap.Error(err), zap.String("file_name", f.Name()))
+							g.logger.Warn("error trying to delete file", zap.Error(err), zap.String("file_name", f.Name()))
 						}
 					}()
 
