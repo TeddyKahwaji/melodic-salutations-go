@@ -260,32 +260,31 @@ func (g *greeterRunner) voiceUpdate(session *discordgo.Session, vc *discordgo.Vo
 	}
 
 	if hasLeft {
-		g.Lock() // Lock before accessing shared data
+		g.Lock()
 		perms, err := session.UserChannelPermissions(session.State.Ready.User.ID, vc.BeforeUpdate.ChannelID)
 		if err != nil {
 			g.logger.Error("unable to get permissions for channel", zap.Error(err), zap.String("channel_id", vc.BeforeUpdate.ChannelID))
-			g.Unlock() // Unlock before returning
+			g.Unlock()
 			return
 		}
 
 		if perms&discordgo.PermissionVoiceConnect == 0 || perms&discordgo.PermissionVoiceSpeak == 0 {
 			g.logger.Info("Bot will not be joining voice channel because they do not have sufficient privileges", zap.String("channel_id", vc.BeforeUpdate.ChannelID))
-			g.Unlock() // Unlock before returning
+			g.Unlock()
 			return
 		}
 		channelMemberCount, err := util.GetVoiceChannelMemberCount(session, vc.BeforeUpdate.GuildID, vc.BeforeUpdate.ChannelID)
 		if err != nil {
 			g.logger.Error("error getting channel member count", zap.Error(err), zap.String("channel_id", vc.BeforeUpdate.ChannelID), zap.String("guild_id", vc.BeforeUpdate.GuildID))
-			g.Unlock() // Unlock before returning
+			g.Unlock()
 			return
 		}
 
-		// Only bot left in server
 		if channelMemberCount == 1 {
 			if botVoiceConnection, ok := session.VoiceConnections[vc.GuildID]; ok && botVoiceConnection.ChannelID == vc.BeforeUpdate.ChannelID {
 				if err := botVoiceConnection.Disconnect(); err != nil {
 					g.logger.Error("error disconnecting from channel", zap.Error(err), zap.String("channel_id", vc.BeforeUpdate.ChannelID))
-					g.Unlock() // Unlock before returning
+					g.Unlock()
 					return
 				}
 
@@ -294,7 +293,7 @@ func (g *greeterRunner) voiceUpdate(session *discordgo.Session, vc *discordgo.Vo
 			g.Unlock()
 			return
 		}
-		g.Unlock() // Unlock after modifications are done
+		g.Unlock()
 	}
 
 	var COLLECTION string
@@ -311,30 +310,29 @@ func (g *greeterRunner) voiceUpdate(session *discordgo.Session, vc *discordgo.Vo
 		} else if hasJoined {
 			targetChannelID = vc.ChannelID
 		}
-		g.Lock() // Lock before accessing shared data
+		g.Lock()
 
 		if _, ok := g.guildPlayerMappings[vc.GuildID]; !ok {
 			perms, err := session.UserChannelPermissions(session.State.Ready.User.ID, targetChannelID)
 			if err != nil {
 				g.logger.Error("unable to get permissions for channel", zap.Error(err), zap.String("channel_id", targetChannelID))
-				g.Unlock() // Unlock before returning
+				g.Unlock()
 				return
 			}
 
 			if perms&int64(discordgo.PermissionVoiceConnect) == 0 || perms&int64(discordgo.PermissionVoiceSpeak) == 0 {
 				g.logger.Info("Bot will not be joining voice channel because they do not have sufficient privileges", zap.String("channel_id", targetChannelID))
-				g.Unlock() // Unlock before returning
+				g.Unlock()
 				return
 			}
 
 			channelVoiceConnection, err := session.ChannelVoiceJoin(vc.GuildID, targetChannelID, false, true)
 			if err != nil {
 				g.logger.Error("error unable to join voice channel", zap.String("channel_id", targetChannelID), zap.String("guild_id", vc.GuildID), zap.Error(err))
-				g.Unlock() // Unlock before returning
+				g.Unlock()
 				return
 			}
 
-			// Modify the shared data (g.guildPlayerMappings)
 			g.guildPlayerMappings[vc.GuildID] = &guildPlayer{
 				guildID:     vc.GuildID,
 				voiceClient: channelVoiceConnection,
@@ -350,27 +348,26 @@ func (g *greeterRunner) voiceUpdate(session *discordgo.Session, vc *discordgo.Vo
 			} else {
 				g.logger.Error("failed to get random audio track from firestore", zap.Error(err), zap.String("user_id", vc.UserID))
 			}
-			g.Unlock() // Unlock before returning
+			g.Unlock()
 			return
 		}
 
 		audioBytes, err := g.firebaseAdapter.DownloadFileBytes(ctx, BucketName, fmt.Sprintf("voicelines/%s", randomAudioTrack))
 		if err != nil {
 			g.logger.Error("failed to get audio bytes from storage", zap.Error(err))
-			g.Unlock() // Unlock before returning
+			g.Unlock()
 			return
 		}
 
 		file, err := util.DownloadFileToTempDirectory(audioBytes)
 		if err != nil {
 			g.logger.Error("failed to download audio bytes to temporary directory", zap.Error(err))
-			g.Unlock() // Unlock before returning
+			g.Unlock()
 			return
 		}
 
-		// Update the queue for the guild
 		g.guildPlayerMappings[vc.GuildID].queue = append(g.guildPlayerMappings[vc.GuildID].queue, file.Name())
-		g.Unlock() // Unlock after modifications are done
+		g.Unlock()
 
 		if g.guildPlayerMappings[vc.GuildID].voiceState == NotPlaying {
 			g.songSignal <- g.guildPlayerMappings[vc.GuildID]
@@ -378,7 +375,6 @@ func (g *greeterRunner) voiceUpdate(session *discordgo.Session, vc *discordgo.Vo
 	}
 }
 
-// TODO: Reduce complexity here.
 func (g *greeterRunner) retrieveRandomAudioName(ctx context.Context, collection string, userId string) (string, error) {
 	data, err := g.firebaseAdapter.GetDocumentFromCollection(ctx, collection, userId)
 	if err != nil {
@@ -464,10 +460,10 @@ func (g *greeterRunner) playAudio(guildPlayer *guildPlayer) {
 					guildPlayer.voiceState = NotPlaying
 				}
 			} else {
-				g.logger.Error("error during audio stream", zap.Error(err))
+				g.logger.Warn("error during audio stream", zap.Error(err))
 			}
 		} else {
-			g.logger.Error("something went wrong during stream session", zap.Error(err))
+			g.logger.Warn("something went wrong during stream session", zap.Error(err))
 		}
 	}
 }
@@ -656,7 +652,6 @@ func (g *greeterRunner) upload(session *discordgo.Session, interaction *discordg
 						return fmt.Errorf("error updating document %w", err)
 					}
 
-					// TODO: Shorten Urls
 					signedURL, err := g.firebaseAdapter.GenerateSignedURL(BucketName, fmt.Sprintf("voicelines/%s", uuid.String()))
 					if err != nil {
 						g.logger.Error("error generating signed url", zap.Error(err), zap.String("member_created_for", member.User.ID), zap.String("member_created_by", interaction.Member.User.ID))
@@ -1013,7 +1008,6 @@ func (g *greeterRunner) messageComponentHandler(session *discordgo.Session, inte
 			3: state.CurrentPage == len(state.Pages)-1,
 		}
 
-		// Update button disabled status
 		if buttonsActionRow, ok := message.Components[0].(*discordgo.ActionsRow); ok {
 			for buttonIndex, buttonDisabled := range buttonStatusMapping {
 				if buttonData, ok := buttonsActionRow.Components[buttonIndex].(*discordgo.Button); ok {
@@ -1024,7 +1018,6 @@ func (g *greeterRunner) messageComponentHandler(session *discordgo.Session, inte
 			message.Components[0] = buttonsActionRow
 		}
 
-		// Update select menu data
 		if state.SelectMenuData != nil {
 			if selectMenuActionRow, ok := message.Components[1].(*discordgo.ActionsRow); ok {
 				if selectMenu, ok := selectMenuActionRow.Components[0].(*discordgo.SelectMenu); ok {
@@ -1040,18 +1033,18 @@ func (g *greeterRunner) messageComponentHandler(session *discordgo.Session, inte
 					var minBound, maxBound int
 
 					totalItems := len(state.SelectMenuData)
-					itemsPerPage := 4 // maximum items per page
+					itemsPerPage := 4
 
 					if state.CurrentPage == 0 {
-						// First page: Show the first set of items
+
 						minBound = 0
 						maxBound = min(itemsPerPage, totalItems)
 					} else if state.CurrentPage == len(state.Pages)-1 {
-						// Last page: Show the last set of items
+
 						minBound = max(0, len(state.SelectMenuData)-len(state.Pages[state.CurrentPage].Fields))
 						maxBound = len(state.SelectMenuData)
 					} else if forwardButtonPressed {
-						// Moving forward: Adjust bounds based on the current bounds
+
 						minBound = state.SelectMenuBound
 						maxBound = min(state.SelectMenuBound+itemsPerPage, totalItems)
 					} else {
@@ -1060,7 +1053,6 @@ func (g *greeterRunner) messageComponentHandler(session *discordgo.Session, inte
 						minBound = maxBound - 4
 					}
 
-					// Ensure maxBound is not greater than the total number of items
 					if maxBound > totalItems {
 						maxBound = totalItems
 					}
