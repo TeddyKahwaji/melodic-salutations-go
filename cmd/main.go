@@ -93,7 +93,7 @@ func main() {
 	<-stop
 }
 
-func NewFirebaseAdapter(ctx context.Context, projectID string, logger *zap.Logger) (firebaseAdapter.Firebase, error) {
+func NewFirebaseAdapter(ctx context.Context, projectID string, logger *zap.Logger) (*firebaseAdapter.FirebaseAdapter, error) {
 	creds, err := gcp.GetCredentials()
 	if err != nil {
 		return nil, fmt.Errorf("error getting gcp credentials  %w", err)

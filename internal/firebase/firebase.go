@@ -25,21 +25,21 @@ type Firebase interface {
 	UploadFileToStorage(ctx context.Context, bucketName string, objectName string, file *os.File, fileName string) error
 }
 
-type firebaseAdapter struct {
+type FirebaseAdapter struct {
 	firestoreClient    *fs.Client
 	cloudStorageClient *gs.Client
 	logger             *zap.Logger
 }
 
-func NewFirebaseHelper(firestoreClient *fs.Client, storageClient *gs.Client, logger *zap.Logger) *firebaseAdapter {
-	return &firebaseAdapter{
+func NewFirebaseHelper(firestoreClient *fs.Client, storageClient *gs.Client, logger *zap.Logger) *FirebaseAdapter {
+	return &FirebaseAdapter{
 		firestoreClient:    firestoreClient,
 		cloudStorageClient: storageClient,
 		logger:             logger,
 	}
 }
 
-func (f *firebaseAdapter) CloneFileFromStorage(ctx context.Context, bucketName string, sourceObject string, destinationObject string) error {
+func (f *FirebaseAdapter) CloneFileFromStorage(ctx context.Context, bucketName string, sourceObject string, destinationObject string) error {
 	source := f.cloudStorageClient.Bucket(bucketName).Object(sourceObject)
 	if _, err := f.cloudStorageClient.Bucket(bucketName).Object(destinationObject).CopierFrom(source).Run(ctx); err != nil {
 		return fmt.Errorf("error cloning object to destination: %w", err)
@@ -48,7 +48,7 @@ func (f *firebaseAdapter) CloneFileFromStorage(ctx context.Context, bucketName s
 	return nil
 }
 
-func (f *firebaseAdapter) DeleteFileFromStorage(ctx context.Context, bucketName string, objectName string) error {
+func (f *FirebaseAdapter) DeleteFileFromStorage(ctx context.Context, bucketName string, objectName string) error {
 	bucket := f.cloudStorageClient.Bucket(bucketName).Object(objectName)
 	if err := bucket.Delete(ctx); err != nil {
 		return fmt.Errorf("error deleting object from bucket: %w", err)
@@ -57,7 +57,7 @@ func (f *firebaseAdapter) DeleteFileFromStorage(ctx context.Context, bucketName 
 	return nil
 }
 
-func (f *firebaseAdapter) UploadFileToStorage(ctx context.Context, bucketName string, objectName string, file *os.File, fileName string) error {
+func (f *FirebaseAdapter) UploadFileToStorage(ctx context.Context, bucketName string, objectName string, file *os.File, fileName string) error {
 	defer file.Close()
 
 	bucket := f.cloudStorageClient.Bucket(bucketName)
@@ -74,7 +74,7 @@ func (f *firebaseAdapter) UploadFileToStorage(ctx context.Context, bucketName st
 	return wc.Close()
 }
 
-func (f *firebaseAdapter) GetDocumentFromCollection(ctx context.Context, collection string, document string) (map[string]interface{}, error) {
+func (f *FirebaseAdapter) GetDocumentFromCollection(ctx context.Context, collection string, document string) (map[string]interface{}, error) {
 	fs, err := f.firestoreClient.Collection(collection).Doc(document).Get(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error getting document from collection %w", err)
@@ -85,13 +85,13 @@ func (f *firebaseAdapter) GetDocumentFromCollection(ctx context.Context, collect
 	return data, nil
 }
 
-func (f *firebaseAdapter) CreateDocument(ctx context.Context, collection string, document string, data interface{}) error {
+func (f *FirebaseAdapter) CreateDocument(ctx context.Context, collection string, document string, data interface{}) error {
 	_, err := f.firestoreClient.Collection(collection).Doc(document).Create(ctx, data)
 
 	return err
 }
 
-func (f *firebaseAdapter) DeleteDocument(ctx context.Context, collection string, document string) error {
+func (f *FirebaseAdapter) DeleteDocument(ctx context.Context, collection string, document string) error {
 	_, err := f.firestoreClient.Collection(collection).Doc(document).Delete(ctx)
 	if err != nil {
 		return fmt.Errorf("error deleting document from collection: %w", err)
@@ -100,7 +100,7 @@ func (f *firebaseAdapter) DeleteDocument(ctx context.Context, collection string,
 	return err
 }
 
-func (f *firebaseAdapter) UpdateDocument(ctx context.Context, collection string, document string, data map[string]interface{}) error {
+func (f *FirebaseAdapter) UpdateDocument(ctx context.Context, collection string, document string, data map[string]interface{}) error {
 	updates := []fs.Update{}
 
 	for key, value := range data {
@@ -117,7 +117,7 @@ func (f *firebaseAdapter) UpdateDocument(ctx context.Context, collection string,
 	return nil
 }
 
-func (f *firebaseAdapter) GenerateSignedURL(bucketName string, objectName string) (string, error) {
+func (f *FirebaseAdapter) GenerateSignedURL(bucketName string, objectName string) (string, error) {
 	bucket := f.cloudStorageClient.Bucket(bucketName)
 	object, err := bucket.SignedURL(objectName, &gs.SignedURLOptions{
 		Scheme:  gs.SigningSchemeV4,
@@ -131,7 +131,7 @@ func (f *firebaseAdapter) GenerateSignedURL(bucketName string, objectName string
 	return object, nil
 }
 
-func (f *firebaseAdapter) DownloadFileBytes(ctx context.Context, bucketName string, objectName string) (io.Reader, error) {
+func (f *FirebaseAdapter) DownloadFileBytes(ctx context.Context, bucketName string, objectName string) (io.Reader, error) {
 	bucket := f.cloudStorageClient.Bucket(bucketName)
 	object := bucket.Object(objectName)
 
