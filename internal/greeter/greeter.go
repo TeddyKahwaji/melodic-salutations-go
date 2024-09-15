@@ -11,7 +11,6 @@ import (
 	"sync"
 	"time"
 
-	cogs "salutations/internal/cogs"
 	"salutations/internal/embeds"
 	firebaseAdapter "salutations/internal/firebase"
 	util "salutations/pkg/util"
@@ -103,7 +102,7 @@ type firebaseOutroRecord struct {
 	OutroArray []trackRecord `firestore:"outro_array"`
 }
 
-func NewGreeterRunner(logger *zap.Logger, ytdlClient *youtube.Client, firebaseAdapter firebaseAdapter.Firebase) (cogs.Cogs, error) {
+func NewGreeterRunner(logger *zap.Logger, ytdlClient *youtube.Client, firebaseAdapter firebaseAdapter.Firebase) (*greeterRunner, error) {
 	songSignals := make(chan *guildPlayer)
 	greeter := &greeterRunner{
 		firebaseAdapter:     firebaseAdapter,

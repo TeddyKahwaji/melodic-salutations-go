@@ -31,6 +31,8 @@ type FirebaseAdapter struct {
 	logger             *zap.Logger
 }
 
+var _ Firebase = (*FirebaseAdapter)(nil)
+
 func NewFirebaseHelper(firestoreClient *fs.Client, storageClient *gs.Client, logger *zap.Logger) *FirebaseAdapter {
 	return &FirebaseAdapter{
 		firestoreClient:    firestoreClient,
