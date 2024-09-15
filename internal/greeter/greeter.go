@@ -73,8 +73,8 @@ type greeterRunner struct {
 	ytdlClient          *youtube.Client
 	songSignal          chan *guildPlayer
 	guildPlayerMappings map[string]*guildPlayer
-	sync.RWMutex
-	messageStore map[string]*paginationState
+	mu                  sync.RWMutex
+	messageStore        map[string]*paginationState
 }
 
 type trackRecord struct {
@@ -260,40 +260,41 @@ func (g *greeterRunner) voiceUpdate(session *discordgo.Session, vc *discordgo.Vo
 	}
 
 	if hasLeft {
-		g.Lock()
+		g.mu.Lock()
 		perms, err := session.UserChannelPermissions(session.State.Ready.User.ID, vc.BeforeUpdate.ChannelID)
 		if err != nil {
 			g.logger.Error("unable to get permissions for channel", zap.Error(err), zap.String("channel_id", vc.BeforeUpdate.ChannelID))
-			g.Unlock()
+			g.mu.Unlock()
 			return
 		}
 
 		if perms&discordgo.PermissionVoiceConnect == 0 || perms&discordgo.PermissionVoiceSpeak == 0 {
 			g.logger.Info("Bot will not be joining voice channel because they do not have sufficient privileges", zap.String("channel_id", vc.BeforeUpdate.ChannelID))
-			g.Unlock()
-			return
-		}
-		channelMemberCount, err := util.GetVoiceChannelMemberCount(session, vc.BeforeUpdate.GuildID, vc.BeforeUpdate.ChannelID)
-		if err != nil {
-			g.logger.Error("error getting channel member count", zap.Error(err), zap.String("channel_id", vc.BeforeUpdate.ChannelID), zap.String("guild_id", vc.BeforeUpdate.GuildID))
-			g.Unlock()
+			g.mu.Unlock()
 			return
 		}
 
-		if channelMemberCount == 1 {
+		channelMemberCount, err := util.GetVoiceChannelMemberCount(session, vc.BeforeUpdate.GuildID, vc.BeforeUpdate.ChannelID)
+		if err != nil {
+			g.logger.Error("error getting channel member count", zap.Error(err), zap.String("channel_id", vc.BeforeUpdate.ChannelID), zap.String("guild_id", vc.BeforeUpdate.GuildID))
+			g.mu.Unlock()
+			return
+		}
+
+		if channelMemberCount <= 1 {
 			if botVoiceConnection, ok := session.VoiceConnections[vc.GuildID]; ok && botVoiceConnection.ChannelID == vc.BeforeUpdate.ChannelID {
 				if err := botVoiceConnection.Disconnect(); err != nil {
 					g.logger.Error("error disconnecting from channel", zap.Error(err), zap.String("channel_id", vc.BeforeUpdate.ChannelID))
-					g.Unlock()
+					g.mu.Unlock()
 					return
 				}
 
 				delete(g.guildPlayerMappings, vc.GuildID)
 			}
-			g.Unlock()
+			g.mu.Unlock()
 			return
 		}
-		g.Unlock()
+		g.mu.Unlock()
 	}
 
 	var COLLECTION string
@@ -310,26 +311,26 @@ func (g *greeterRunner) voiceUpdate(session *discordgo.Session, vc *discordgo.Vo
 		} else if hasJoined {
 			targetChannelID = vc.ChannelID
 		}
-		g.Lock()
+		g.mu.Lock()
 
 		if _, ok := g.guildPlayerMappings[vc.GuildID]; !ok {
 			perms, err := session.UserChannelPermissions(session.State.Ready.User.ID, targetChannelID)
 			if err != nil {
 				g.logger.Error("unable to get permissions for channel", zap.Error(err), zap.String("channel_id", targetChannelID))
-				g.Unlock()
+				g.mu.Unlock()
 				return
 			}
 
 			if perms&int64(discordgo.PermissionVoiceConnect) == 0 || perms&int64(discordgo.PermissionVoiceSpeak) == 0 {
 				g.logger.Info("Bot will not be joining voice channel because they do not have sufficient privileges", zap.String("channel_id", targetChannelID))
-				g.Unlock()
+				g.mu.Unlock()
 				return
 			}
 
 			channelVoiceConnection, err := session.ChannelVoiceJoin(vc.GuildID, targetChannelID, false, true)
 			if err != nil {
 				g.logger.Error("error unable to join voice channel", zap.String("channel_id", targetChannelID), zap.String("guild_id", vc.GuildID), zap.Error(err))
-				g.Unlock()
+				g.mu.Unlock()
 				return
 			}
 
@@ -348,26 +349,26 @@ func (g *greeterRunner) voiceUpdate(session *discordgo.Session, vc *discordgo.Vo
 			} else {
 				g.logger.Error("failed to get random audio track from firestore", zap.Error(err), zap.String("user_id", vc.UserID))
 			}
-			g.Unlock()
+			g.mu.Unlock()
 			return
 		}
 
 		audioBytes, err := g.firebaseAdapter.DownloadFileBytes(ctx, BucketName, fmt.Sprintf("voicelines/%s", randomAudioTrack))
 		if err != nil {
 			g.logger.Error("failed to get audio bytes from storage", zap.Error(err))
-			g.Unlock()
+			g.mu.Unlock()
 			return
 		}
 
 		file, err := util.DownloadFileToTempDirectory(audioBytes)
 		if err != nil {
 			g.logger.Error("failed to download audio bytes to temporary directory", zap.Error(err))
-			g.Unlock()
+			g.mu.Unlock()
 			return
 		}
 
 		g.guildPlayerMappings[vc.GuildID].queue = append(g.guildPlayerMappings[vc.GuildID].queue, file.Name())
-		g.Unlock()
+		g.mu.Unlock()
 
 		if g.guildPlayerMappings[vc.GuildID].voiceState == NotPlaying {
 			g.songSignal <- g.guildPlayerMappings[vc.GuildID]
@@ -423,11 +424,11 @@ func (g *greeterRunner) playAudio(guildPlayer *guildPlayer) {
 		return
 	}
 
-	g.Lock()
+	g.mu.Lock()
 	guildPlayer.voiceState = Playing
 	audioPath := guildPlayer.queue[0]
 	guildPlayer.queue = guildPlayer.queue[1:]
-	g.Unlock()
+	g.mu.Unlock()
 
 	defer func() {
 		if err := util.DeleteFile(audioPath); err != nil {
@@ -658,9 +659,9 @@ func (g *greeterRunner) upload(session *discordgo.Session, interaction *discordg
 						return fmt.Errorf("error generating signed url %w", err)
 					}
 
-					g.Lock()
+					g.mu.Lock()
 					urlsCreated = append(urlsCreated, signedURL)
-					g.Unlock()
+					g.mu.Unlock()
 
 					return nil
 				})
@@ -742,7 +743,7 @@ func (g *greeterRunner) extractAudioTracksForUser(ctx context.Context, data map[
 				eg.Go(func() error {
 					trackTitle := track["track_name"].(string)
 
-					g.Lock()
+					g.mu.Lock()
 
 					urlData, err := g.firebaseAdapter.GenerateSignedURL(BucketName, fmt.Sprintf("voicelines/"+trackTitle))
 					if err != nil {
@@ -753,7 +754,7 @@ func (g *greeterRunner) extractAudioTracksForUser(ctx context.Context, data map[
 						TrackSignedURL: urlData,
 					})
 
-					g.Unlock()
+					g.mu.Unlock()
 					return nil
 				})
 			}

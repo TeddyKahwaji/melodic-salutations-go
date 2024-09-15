@@ -86,7 +86,11 @@ func main() {
 		logger.Fatal("error opening connection", zap.Error(err))
 	}
 
-	defer bot.Close()
+	defer func() {
+		if err := bot.Close(); err != nil {
+			logger.Warn("couldn't close bot", zap.Error(err))
+		}
+	}()
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt)
